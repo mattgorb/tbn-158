@@ -20,6 +20,7 @@ from .attention import (
     VarlenAttention,
     VarlenMetadata,
 )
+from .bitnet158 import BitLinear158, TBNBitLinear158
 from .decoder import Decoder, TransformerBlock
 from .embedding import Embedding
 from .feed_forward import compute_ffn_hidden_dim, FeedForward
@@ -47,8 +48,10 @@ __all__ = [
     "get_fixed_block_mask_mod",
     "get_sliding_window_mask_mod",
     "GQAttention",
+    "BitLinear158",
     "Linear",
     "MoE",
+    "TBNBitLinear158",
     "QKVLinear",
     "RMSNorm",
     "RoPE",

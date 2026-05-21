@@ -74,8 +74,14 @@ def make_gqa_config(
     mask_type: str = "causal",
     rope_backend: str = "complex",
     qk_norm: RMSNorm.Config | None = None,
+    linear_config_factory: Callable[..., Module.Config] = Linear.Config,
 ) -> GQAttention.Config:
-    """Build a fully-specified GQAttention.Config."""
+    """Build a fully-specified GQAttention.Config.
+
+    Pass ``linear_config_factory=BitLinear158.Config`` (or a ``functools.partial`` wrapping
+    ``TBNBitLinear158.Config(..., tile_size=p)``) to swap every Q/K/V/O projection for a
+    quantized variant. Default preserves the original behavior.
+    """
     n_kv = n_kv_heads if n_kv_heads is not None else n_heads
     per_head_dim = head_dim if head_dim is not None else dim // n_heads
 
@@ -84,7 +90,7 @@ def make_gqa_config(
             head_dim=per_head_dim,
             n_heads=n_heads,
             n_kv_heads=n_kv,
-            wqkv=Linear.Config(
+            wqkv=linear_config_factory(
                 in_features=dim,
                 out_features=(n_heads + 2 * n_kv) * per_head_dim,
                 param_init=wqkv_param_init,
@@ -93,12 +99,12 @@ def make_gqa_config(
     else:
         qkv = QKVLinear.Config(
             head_dim=per_head_dim,
-            wq=Linear.Config(
+            wq=linear_config_factory(
                 in_features=dim,
                 out_features=n_heads * per_head_dim,
                 param_init=wqkv_param_init,
             ),
-            wkv=Linear.Config(
+            wkv=linear_config_factory(
                 in_features=dim,
                 out_features=n_kv * per_head_dim,
                 param_init=wqkv_param_init,
@@ -111,7 +117,7 @@ def make_gqa_config(
         head_dim=head_dim,
         dim=dim,
         qkv_linear=qkv,
-        wo=Linear.Config(
+        wo=linear_config_factory(
             in_features=n_heads * per_head_dim,
             out_features=dim,
             param_init=wo_param_init,
@@ -130,16 +136,22 @@ def make_ffn_config(
     hidden_dim: int,
     w1_param_init: dict[str, Callable],
     w2w3_param_init: dict[str, Callable],
+    linear_config_factory: Callable[..., Module.Config] = Linear.Config,
 ) -> FeedForward.Config:
-    """Build a fully-specified FeedForward.Config."""
+    """Build a fully-specified FeedForward.Config.
+
+    Pass ``linear_config_factory=BitLinear158.Config`` (or a ``functools.partial`` wrapping
+    ``TBNBitLinear158.Config(..., tile_size=p)``) to swap every w1/w2/w3 projection for a
+    quantized variant. Default preserves the original behavior.
+    """
     return FeedForward.Config(
-        w1=Linear.Config(
+        w1=linear_config_factory(
             in_features=dim, out_features=hidden_dim, param_init=w1_param_init
         ),
-        w2=Linear.Config(
+        w2=linear_config_factory(
             in_features=hidden_dim, out_features=dim, param_init=w2w3_param_init
         ),
-        w3=Linear.Config(
+        w3=linear_config_factory(
             in_features=dim, out_features=hidden_dim, param_init=w2w3_param_init
         ),
     )

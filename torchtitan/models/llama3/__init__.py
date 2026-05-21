@@ -11,11 +11,13 @@ import torch.nn as nn
 
 from torchtitan.distributed.pipeline_parallel import pipeline_llm
 from torchtitan.models.common import (
+    BitLinear158,
     compute_ffn_hidden_dim,
     Embedding,
     Linear,
     RMSNorm,
     RoPE,
+    TBNBitLinear158,
     TransformerBlock,
 )
 from torchtitan.models.common.config_utils import (
@@ -73,8 +75,14 @@ def _build_llama3_layers(
     n_kv_heads: int | None = None,
     fuse_qkv: bool = False,
     attn_backend: str,
+    linear_config_factory: Callable[..., object] = Linear.Config,
 ) -> list[TransformerBlock.Config]:
-    """Build a list of per-layer TransformerBlock configs with depth-scaled inits."""
+    """Build a list of per-layer TransformerBlock configs with depth-scaled inits.
+
+    ``linear_config_factory`` selects the linear variant for every attention/FFN projection
+    in every layer. Pass ``BitLinear158.Config`` or a partial-wrapped ``TBNBitLinear158.Config``
+    to BitNet-ize the transformer; the default keeps the original Linear behavior.
+    """
     inner_attention, mask_type = get_attention_config(attn_backend)
     layers = []
     for layer_id in range(n_layers):
@@ -94,12 +102,14 @@ def _build_llama3_layers(
                     fuse_qkv=fuse_qkv,
                     mask_type=mask_type,
                     rope_backend="complex",
+                    linear_config_factory=linear_config_factory,
                 ),
                 feed_forward=make_ffn_config(
                     dim=dim,
                     hidden_dim=hidden_dim,
                     w1_param_init=_LINEAR_INIT,
                     w2w3_param_init=_depth_init(layer_id),
+                    linear_config_factory=linear_config_factory,
                 ),
             )
         )
@@ -251,6 +261,67 @@ def _3b(attn_backend: str) -> Llama3Model.Config:
     )
 
 
+def _3b_with_linear_factory(
+    attn_backend: str,
+    linear_config_factory: Callable[..., object],
+) -> Llama3Model.Config:
+    """3B Llama-3 with a custom linear factory for every attention/FFN projection.
+    Embedding, lm_head, and RMSNorms stay full precision (paper convention).
+    """
+    dim = 3072
+    n_heads = 24
+    n_kv_heads = 8
+    n_layers = 28
+    vocab_size = 128256
+    return Llama3Model.Config(
+        dim=dim,
+        vocab_size=vocab_size,
+        enable_weight_tying=True,
+        tok_embeddings=Embedding.Config(
+            num_embeddings=vocab_size,
+            embedding_dim=dim,
+            param_init=_EMBEDDING_SKIP_INIT,
+        ),
+        norm=RMSNorm.Config(normalized_shape=dim, param_init=_NORM_INIT),
+        lm_head=Linear.Config(
+            in_features=dim,
+            out_features=vocab_size,
+            param_init=_output_linear_init(dim),
+        ),
+        rope=RoPE.Config(
+            dim=dim // n_heads,
+            max_seq_len=131072,
+            theta=500000,
+            backend="complex",
+            scaling="llama",
+        ),
+        layers=_build_llama3_layers(
+            n_layers=n_layers,
+            dim=dim,
+            n_heads=n_heads,
+            n_kv_heads=n_kv_heads,
+            hidden_dim=compute_ffn_hidden_dim(
+                dim, multiple_of=1024, ffn_dim_multiplier=1.0
+            ),
+            attn_backend=attn_backend,
+            linear_config_factory=linear_config_factory,
+        ),
+    )
+
+
+def _3b_bitnet158(attn_backend: str) -> Llama3Model.Config:
+    """Llama-3 3B with every attention/FFN linear replaced by BitLinear158 (arXiv:2402.17764)."""
+    return _3b_with_linear_factory(attn_backend, BitLinear158.Config)
+
+
+def _3b_tbn158(attn_backend: str) -> Llama3Model.Config:
+    """Llama-3 3B with every attention/FFN linear replaced by TBNBitLinear158 (tile_size=2)."""
+    return _3b_with_linear_factory(
+        attn_backend,
+        partial(TBNBitLinear158.Config, tile_size=2),
+    )
+
+
 def _8b(attn_backend: str) -> Llama3Model.Config:
     dim = 4096
     n_heads = 32
@@ -370,6 +441,8 @@ llama3_configs = {
     "debugmodel_fused_qkv": _debugmodel_fused_qkv,
     "1B": _1b,
     "3B": _3b,
+    "3B_bitnet158": _3b_bitnet158,
+    "3B_tbn158": _3b_tbn158,
     "8B": _8b,
     "70B": _70b,
     "405B": _405b,
