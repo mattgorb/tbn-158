@@ -194,6 +194,7 @@ def _llama3_3b_base(model_flavor: str) -> Trainer.Config:
         checkpoint=CheckpointManager.Config(
             enable=True,
             interval=500,
+            keep_latest_k=4,
             last_save_model_only=False,
         ),
         activation_checkpoint=ActivationCheckpointConfig(

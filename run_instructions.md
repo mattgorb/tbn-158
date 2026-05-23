@@ -24,6 +24,15 @@ python -m torchtitan.tools.download_hf_assets \
 
 ## Train (2 GPUs)
 
+Confirm both GPUs are visible first:
+
+```bash
+nvidia-smi -L                                      # expect 2 lines
+python -c "import torch; print(torch.cuda.device_count())"   # expect 2
+```
+
+If you see more than 2, pin the run to specific devices with `CUDA_VISIBLE_DEVICES=0,1`.
+
 ```bash
 NGPU=2 MODULE=llama3 CONFIG=llama3_3b_tbn158 ./run_train.sh
 ```
@@ -32,7 +41,7 @@ Swap `llama3_3b_tbn158` for `llama3_3b_bitnet158` or `llama3_3b` for the other f
 
 ## Resume after a crash
 
-Same command. The trainer auto-resumes from the latest `./outputs/checkpoint/step-N/` (interval 500, latest 10 kept).
+Same command. The trainer auto-resumes from the latest `./outputs/checkpoint/step-N/` (interval 500, latest 4 kept, ~38 GB each → ~150 GB total).
 
 To pin a specific step: `--checkpoint.load_step=2500`.
 
