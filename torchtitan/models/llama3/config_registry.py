@@ -164,6 +164,60 @@ def llama3_8b() -> Trainer.Config:
     )
 
 
+def _llama3_3b_base(model_flavor: str) -> Trainer.Config:
+    """Llama-3 3B base trainer config, parameterized by model flavor.
+
+    Sized for 80 GB GPUs with FSDP. Tokenizer assets expected at
+    ``./assets/hf/Llama-3.2-3B`` (HF gated download).
+    """
+    return Trainer.Config(
+        loss=ChunkedCELoss.Config(),
+        hf_assets_path="./assets/hf/Llama-3.2-3B",
+        profiler=Profiler.Config(
+            enable_profiling=True,
+            profile_freq=100,
+        ),
+        metrics=MetricsProcessor.Config(
+            enable_tensorboard=True,
+            enable_wandb=True,
+        ),
+        model_spec=model_registry(model_flavor),
+        optimizer=OptimizersContainer.Config(lr=3e-4),
+        training=TrainingConfig(
+            local_batch_size=2,
+            seq_len=4096,
+            steps=1000,
+        ),
+        dataloader=HuggingFaceTextDataLoader.Config(
+            dataset="c4",
+        ),
+        checkpoint=CheckpointManager.Config(
+            enable=True,
+            interval=500,
+            last_save_model_only=False,
+        ),
+        activation_checkpoint=ActivationCheckpointConfig(
+            mode="selective",
+        ),
+        validator=Validator.Config(
+            freq=500,
+            steps=1200,
+        ),
+    )
+
+
+def llama3_3b() -> Trainer.Config:
+    return _llama3_3b_base("3B")
+
+
+def llama3_3b_bitnet158() -> Trainer.Config:
+    return _llama3_3b_base("3B_bitnet158")
+
+
+def llama3_3b_tbn158() -> Trainer.Config:
+    return _llama3_3b_base("3B_tbn158")
+
+
 def llama3_70b() -> Trainer.Config:
     return Trainer.Config(
         loss=ChunkedCELoss.Config(),
