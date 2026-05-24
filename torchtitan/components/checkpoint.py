@@ -22,7 +22,14 @@ import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 import torch.nn as nn
-from torch.distributed.checkpoint import HuggingFaceStorageWriter
+try:
+    from torch.distributed.checkpoint import HuggingFaceStorageWriter
+except ImportError:
+    # Older torch versions kept this as a private API. Drop this branch once
+    # the minimum supported torch is past the private→public rename.
+    from torch.distributed.checkpoint import (
+        _HuggingFaceStorageWriter as HuggingFaceStorageWriter,
+    )
 from torch.distributed.checkpoint._consolidate_hf_safetensors import (
     consolidate_safetensors_files_on_every_rank,
 )

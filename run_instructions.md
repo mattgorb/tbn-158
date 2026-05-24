@@ -18,8 +18,10 @@ huggingface-cli login           # for the gated Llama-3.2 tokenizer
 wandb login                     # paste API key once
 export WANDB_PROJECT=tbn158     
 
-python -m torchtitan.tools.download_hf_assets \
-    --repo_id meta-llama/Llama-3.2-3B --assets_dir ./assets/hf
+python scripts/download_hf_assets.py \
+    --repo_id meta-llama/Llama-3.2-3B \
+    --local_dir ./assets/hf \
+    --assets tokenizer
 ```
 
 ## Train (2 GPUs)
@@ -39,23 +41,23 @@ NGPU=2 MODULE=llama3 CONFIG=llama3_3b_tbn158 ./run_train.sh
 
 Defaults (batch=2, seq=4096, FSDP, selective AC) fit ~35–45 GB/GPU on 80 GB cards. 
 
-If you OOM, apply these in order — each is a smaller hammer than the last:
+If you OOM, append one of these flags to the train command — apply in order, each is a smaller hammer than the last:
 
 ```bash
 # 1. Halve seq_len (biggest single win, halves activation memory)
-./run_train.sh ... --training.seq_len=2048
+NGPU=2 MODULE=llama3 CONFIG=llama3_3b_tbn158 ./run_train.sh --training.seq_len=2048
 
 # 2. Drop batch size
-./run_train.sh ... --training.local_batch_size=1
+NGPU=2 MODULE=llama3 CONFIG=llama3_3b_tbn158 ./run_train.sh --training.local_batch_size=1
 
 # 3. Full activation checkpointing (more recompute, less stored)
-./run_train.sh ... --activation_checkpoint.mode=full
+NGPU=2 MODULE=llama3 CONFIG=llama3_3b_tbn158 ./run_train.sh --activation_checkpoint.mode=full
 
 # 4. Last resort — FSDP CPU offload (much slower)
-./run_train.sh ... --training.enable_cpu_offload
+NGPU=2 MODULE=llama3 CONFIG=llama3_3b_tbn158 ./run_train.sh --training.enable_cpu_offload
 ```
 
-Stack them if needed (`--training.seq_len=2048 --training.local_batch_size=1 ...`). Swap `llama3_3b_tbn158` for `llama3_3b_bitnet158` or `llama3_3b` for the other flavors.
+Stack flags as needed: `... --training.seq_len=2048 --training.local_batch_size=1 --activation_checkpoint.mode=full`. Swap `llama3_3b_tbn158` for `llama3_3b_bitnet158` or `llama3_3b` for the other flavors.
 
 ## Resume after a crash
 
