@@ -37,7 +37,25 @@ If you see more than 2, pin the run to specific devices with `CUDA_VISIBLE_DEVIC
 NGPU=2 MODULE=llama3 CONFIG=llama3_3b_tbn158 ./run_train.sh
 ```
 
-Swap `llama3_3b_tbn158` for `llama3_3b_bitnet158` or `llama3_3b` for the other flavors. Override anything from the CLI: `--training.steps=20000`, `--optimizer.lr=2e-4`, `--training.local_batch_size=1`, etc.
+Defaults (batch=2, seq=4096, FSDP, selective AC) fit ~35–45 GB/GPU on 80 GB cards. 
+
+If you OOM, apply these in order — each is a smaller hammer than the last:
+
+```bash
+# 1. Halve seq_len (biggest single win, halves activation memory)
+./run_train.sh ... --training.seq_len=2048
+
+# 2. Drop batch size
+./run_train.sh ... --training.local_batch_size=1
+
+# 3. Full activation checkpointing (more recompute, less stored)
+./run_train.sh ... --activation_checkpoint.mode=full
+
+# 4. Last resort — FSDP CPU offload (much slower)
+./run_train.sh ... --training.enable_cpu_offload
+```
+
+Stack them if needed (`--training.seq_len=2048 --training.local_batch_size=1 ...`). Swap `llama3_3b_tbn158` for `llama3_3b_bitnet158` or `llama3_3b` for the other flavors.
 
 ## Resume after a crash
 
