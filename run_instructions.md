@@ -16,7 +16,7 @@ WandB + checkpointing are on by default.
 pip install -r requirements.txt
 huggingface-cli login           # for the gated Llama-3.2 tokenizer
 wandb login                     # paste API key once
-export WANDB_PROJECT=tbn158     # optional; group runs in the UI
+export WANDB_PROJECT=tbn158     
 
 python -m torchtitan.tools.download_hf_assets \
     --repo_id meta-llama/Llama-3.2-3B --assets_dir ./assets/hf
