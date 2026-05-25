@@ -1,12 +1,18 @@
-# Running Llama-3 (3B)
+# Running Llama-3
 
-Three flavors registered in [config_registry.py](torchtitan/models/llama3/config_registry.py):
+Four sizes × three linear flavors = 12 configs registered in [config_registry.py](torchtitan/models/llama3/config_registry.py). All share the Llama-3 tokenizer (128k vocab) and weight-tied embeddings.
 
-| `--config`            | Linears                                |
-| --------------------- | -------------------------------------- |
-| `llama3_3b`           | Standard `nn.Linear`                   |
-| `llama3_3b_bitnet158` | `BitLinear158` (ternary {-1, 0, +1})   |
-| `llama3_3b_tbn158`    | `TBNBitLinear158`, tile_size=2         |
+| Size | Architecture                       | `--config` (plain / bitnet158 / tbn158)                                     |
+| ---- | ---------------------------------- | --------------------------------------------------------------------------- |
+| 200M | dim=768, 16 layers, GQA 12/4       | `llama3_200m`, `llama3_200m_bitnet158`, `llama3_200m_tbn158`                |
+| 500M | dim=1024, 28 layers, GQA 16/4      | `llama3_500m`, `llama3_500m_bitnet158`, `llama3_500m_tbn158`                |
+| 700M | dim=1536, 24 layers, GQA 24/8      | `llama3_700m`, `llama3_700m_bitnet158`, `llama3_700m_tbn158`                |
+| 3B   | dim=3072, 28 layers, GQA 24/8      | `llama3_3b`,   `llama3_3b_bitnet158`,   `llama3_3b_tbn158`                  |
+
+Linear flavors:
+- **plain** — standard `nn.Linear` (bf16 baseline)
+- **`_bitnet158`** — `BitLinear158`, ternary {-1, 0, +1} weights (arXiv:2402.17764)
+- **`_tbn158`** — `TBNBitLinear158`, ternary on tile-averaged weights (tile_size=2)
 
 WandB + checkpointing are on by default.
 
@@ -35,11 +41,31 @@ python -c "import torch; print(torch.cuda.device_count())"   # expect 2
 
 If you see more than 2, pin the run to specific devices with `CUDA_VISIBLE_DEVICES=0,1`.
 
+Pick the size you want and run it. Each line is self-contained — change `_tbn158` to `_bitnet158` or drop the suffix for the plain baseline.
+
 ```bash
+# 200M — fastest iteration, big batch
+NGPU=2 MODULE=llama3 CONFIG=llama3_200m_tbn158 ./run_train.sh
+
+# 500M
+NGPU=2 MODULE=llama3 CONFIG=llama3_500m_tbn158 ./run_train.sh
+
+# 700M — matches BitNet b1.58 paper size
+NGPU=2 MODULE=llama3 CONFIG=llama3_700m_tbn158 ./run_train.sh
+
+# 3B — the big one
 NGPU=2 MODULE=llama3 CONFIG=llama3_3b_tbn158 ./run_train.sh
 ```
 
-Defaults (batch=2, seq=4096, FSDP, selective AC) fit ~35–45 GB/GPU on 80 GB cards. 
+Per-size defaults (sized for 80 GB cards):
+
+| Size | local_batch_size | seq_len | lr   | Approx GPU memory |
+| ---- | ---------------- | ------- | ---- | ----------------- |
+| 200M | 16               | 2048    | 5e-4 | ~12 GB            |
+| 500M | 8                | 2048    | 4e-4 | ~20 GB            |
+| 700M | 4                | 2048    | 4e-4 | ~22 GB            |
+| 3B   | 2                | 4096    | 3e-4 | ~40 GB            |
+
 
 If you OOM, append one of these flags to the train command — apply in order, each is a smaller hammer than the last:
 

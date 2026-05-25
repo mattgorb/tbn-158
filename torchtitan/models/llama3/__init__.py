@@ -179,6 +179,146 @@ def _debugmodel_fused_qkv(attn_backend: str) -> Llama3Model.Config:
     )
 
 
+def _small_with_linear_factory(
+    *,
+    attn_backend: str,
+    linear_config_factory: Callable[..., object],
+    dim: int,
+    n_heads: int,
+    n_kv_heads: int,
+    n_layers: int,
+    hidden_dim_multiple_of: int = 256,
+    ffn_dim_multiplier: float | None = None,
+) -> Llama3Model.Config:
+    """Llama-3 small-model builder shared by 500M and 700M flavors.
+
+    ``linear_config_factory`` swaps the linear class used in every attention/FFN
+    projection (Linear / BitLinear158 / partial-wrapped TBNBitLinear158).
+    Embedding, lm_head, and RMSNorms stay full precision per the b1.58 paper.
+    """
+    vocab_size = 128256
+    return Llama3Model.Config(
+        dim=dim,
+        vocab_size=vocab_size,
+        enable_weight_tying=True,
+        tok_embeddings=Embedding.Config(
+            num_embeddings=vocab_size,
+            embedding_dim=dim,
+            param_init=_EMBEDDING_SKIP_INIT,
+        ),
+        norm=RMSNorm.Config(normalized_shape=dim, param_init=_NORM_INIT),
+        lm_head=Linear.Config(
+            in_features=dim,
+            out_features=vocab_size,
+            param_init=_output_linear_init(dim),
+        ),
+        rope=RoPE.Config(
+            dim=dim // n_heads,
+            max_seq_len=131072,
+            theta=500000,
+            backend="complex",
+            scaling="llama",
+        ),
+        layers=_build_llama3_layers(
+            n_layers=n_layers,
+            dim=dim,
+            n_heads=n_heads,
+            n_kv_heads=n_kv_heads,
+            hidden_dim=compute_ffn_hidden_dim(
+                dim,
+                multiple_of=hidden_dim_multiple_of,
+                ffn_dim_multiplier=ffn_dim_multiplier,
+            ),
+            attn_backend=attn_backend,
+            linear_config_factory=linear_config_factory,
+        ),
+    )
+
+
+# ~200M-param Llama-3-style: dim=768, 16 layers, GQA 12/4.
+# ~100M of params is in the (tied) 128k-vocab embedding alone.
+_200M_HPARAMS = dict(dim=768, n_heads=12, n_kv_heads=4, n_layers=16)
+
+# ~500M-param Llama-3-style: dim=1024, 28 layers, GQA 16/4.
+_500M_HPARAMS = dict(dim=1024, n_heads=16, n_kv_heads=4, n_layers=28)
+
+# ~700M-param Llama-3-style, matching BitNet b1.58 paper proportions
+# (dim=1536, 24 layers, hidden=4096) modernized with GQA 24/8.
+_700M_HPARAMS = dict(dim=1536, n_heads=24, n_kv_heads=8, n_layers=24)
+
+
+def _200m(attn_backend: str) -> Llama3Model.Config:
+    return _small_with_linear_factory(
+        attn_backend=attn_backend,
+        linear_config_factory=Linear.Config,
+        **_200M_HPARAMS,
+    )
+
+
+def _200m_bitnet158(attn_backend: str) -> Llama3Model.Config:
+    return _small_with_linear_factory(
+        attn_backend=attn_backend,
+        linear_config_factory=BitLinear158.Config,
+        **_200M_HPARAMS,
+    )
+
+
+def _200m_tbn158(attn_backend: str) -> Llama3Model.Config:
+    return _small_with_linear_factory(
+        attn_backend=attn_backend,
+        linear_config_factory=partial(TBNBitLinear158.Config, tile_size=2),
+        **_200M_HPARAMS,
+    )
+
+
+def _500m(attn_backend: str) -> Llama3Model.Config:
+    return _small_with_linear_factory(
+        attn_backend=attn_backend,
+        linear_config_factory=Linear.Config,
+        **_500M_HPARAMS,
+    )
+
+
+def _500m_bitnet158(attn_backend: str) -> Llama3Model.Config:
+    return _small_with_linear_factory(
+        attn_backend=attn_backend,
+        linear_config_factory=BitLinear158.Config,
+        **_500M_HPARAMS,
+    )
+
+
+def _500m_tbn158(attn_backend: str) -> Llama3Model.Config:
+    return _small_with_linear_factory(
+        attn_backend=attn_backend,
+        linear_config_factory=partial(TBNBitLinear158.Config, tile_size=2),
+        **_500M_HPARAMS,
+    )
+
+
+def _700m(attn_backend: str) -> Llama3Model.Config:
+    return _small_with_linear_factory(
+        attn_backend=attn_backend,
+        linear_config_factory=Linear.Config,
+        **_700M_HPARAMS,
+    )
+
+
+def _700m_bitnet158(attn_backend: str) -> Llama3Model.Config:
+    return _small_with_linear_factory(
+        attn_backend=attn_backend,
+        linear_config_factory=BitLinear158.Config,
+        **_700M_HPARAMS,
+    )
+
+
+def _700m_tbn158(attn_backend: str) -> Llama3Model.Config:
+    return _small_with_linear_factory(
+        attn_backend=attn_backend,
+        linear_config_factory=partial(TBNBitLinear158.Config, tile_size=2),
+        **_700M_HPARAMS,
+    )
+
+
 def _1b(attn_backend: str) -> Llama3Model.Config:
     dim = 2048
     n_heads = 32
@@ -439,6 +579,15 @@ def _405b(attn_backend: str) -> Llama3Model.Config:
 llama3_configs = {
     "debugmodel": _debugmodel,
     "debugmodel_fused_qkv": _debugmodel_fused_qkv,
+    "200M": _200m,
+    "200M_bitnet158": _200m_bitnet158,
+    "200M_tbn158": _200m_tbn158,
+    "500M": _500m,
+    "500M_bitnet158": _500m_bitnet158,
+    "500M_tbn158": _500m_tbn158,
+    "700M": _700m,
+    "700M_bitnet158": _700m_bitnet158,
+    "700M_tbn158": _700m_tbn158,
     "1B": _1b,
     "3B": _3b,
     "3B_bitnet158": _3b_bitnet158,

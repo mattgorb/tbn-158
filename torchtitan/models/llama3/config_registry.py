@@ -164,11 +164,18 @@ def llama3_8b() -> Trainer.Config:
     )
 
 
-def _llama3_3b_base(model_flavor: str) -> Trainer.Config:
-    """Llama-3 3B base trainer config, parameterized by model flavor.
+def _llama3_pretrain_base(
+    model_flavor: str,
+    *,
+    local_batch_size: int = 2,
+    seq_len: int = 4096,
+    lr: float = 3e-4,
+) -> Trainer.Config:
+    """Shared pretrain trainer config for the small/medium Llama-3 flavors.
 
     Sized for 80 GB GPUs with FSDP. Tokenizer assets expected at
-    ``./assets/hf/Llama-3.2-3B`` (HF gated download).
+    ``./assets/hf/Llama-3.2-3B`` (HF gated download); the same tokenizer works
+    for all sizes since they share Llama-3's 128k vocab.
     """
     return Trainer.Config(
         loss=ChunkedCELoss.Config(),
@@ -182,10 +189,10 @@ def _llama3_3b_base(model_flavor: str) -> Trainer.Config:
             enable_wandb=True,
         ),
         model_spec=model_registry(model_flavor),
-        optimizer=OptimizersContainer.Config(lr=3e-4),
+        optimizer=OptimizersContainer.Config(lr=lr),
         training=TrainingConfig(
-            local_batch_size=2,
-            seq_len=4096,
+            local_batch_size=local_batch_size,
+            seq_len=seq_len,
             steps=1000,
         ),
         dataloader=HuggingFaceTextDataLoader.Config(
@@ -207,16 +214,74 @@ def _llama3_3b_base(model_flavor: str) -> Trainer.Config:
     )
 
 
+# --- 200M --------------------------------------------------------------------
+# Tiny — fits big batch easily, fast iteration.
+
+def llama3_200m() -> Trainer.Config:
+    return _llama3_pretrain_base("200M", local_batch_size=16, seq_len=2048, lr=5e-4)
+
+
+def llama3_200m_bitnet158() -> Trainer.Config:
+    return _llama3_pretrain_base(
+        "200M_bitnet158", local_batch_size=16, seq_len=2048, lr=5e-4
+    )
+
+
+def llama3_200m_tbn158() -> Trainer.Config:
+    return _llama3_pretrain_base(
+        "200M_tbn158", local_batch_size=16, seq_len=2048, lr=5e-4
+    )
+
+
+# --- 500M --------------------------------------------------------------------
+# Small enough to push batch up; LR slightly higher per small-model convention.
+
+def llama3_500m() -> Trainer.Config:
+    return _llama3_pretrain_base("500M", local_batch_size=8, seq_len=2048, lr=4e-4)
+
+
+def llama3_500m_bitnet158() -> Trainer.Config:
+    return _llama3_pretrain_base(
+        "500M_bitnet158", local_batch_size=8, seq_len=2048, lr=4e-4
+    )
+
+
+def llama3_500m_tbn158() -> Trainer.Config:
+    return _llama3_pretrain_base(
+        "500M_tbn158", local_batch_size=8, seq_len=2048, lr=4e-4
+    )
+
+
+# --- 700M (matches BitNet b1.58 paper size) ----------------------------------
+
+def llama3_700m() -> Trainer.Config:
+    return _llama3_pretrain_base("700M", local_batch_size=4, seq_len=2048, lr=4e-4)
+
+
+def llama3_700m_bitnet158() -> Trainer.Config:
+    return _llama3_pretrain_base(
+        "700M_bitnet158", local_batch_size=4, seq_len=2048, lr=4e-4
+    )
+
+
+def llama3_700m_tbn158() -> Trainer.Config:
+    return _llama3_pretrain_base(
+        "700M_tbn158", local_batch_size=4, seq_len=2048, lr=4e-4
+    )
+
+
+# --- 3B ----------------------------------------------------------------------
+
 def llama3_3b() -> Trainer.Config:
-    return _llama3_3b_base("3B")
+    return _llama3_pretrain_base("3B")
 
 
 def llama3_3b_bitnet158() -> Trainer.Config:
-    return _llama3_3b_base("3B_bitnet158")
+    return _llama3_pretrain_base("3B_bitnet158")
 
 
 def llama3_3b_tbn158() -> Trainer.Config:
-    return _llama3_3b_base("3B_tbn158")
+    return _llama3_pretrain_base("3B_tbn158")
 
 
 def llama3_70b() -> Trainer.Config:
