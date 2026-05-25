@@ -67,7 +67,9 @@ Per-size defaults (sized for 80 GB cards):
 | 3B   | 2                | 4096    | 3e-4 | ~40 GB            |
 
 
-If you OOM, append one of these flags to the train command — apply in order, each is a smaller hammer than the last:
+### If you OOM
+
+Apply in order, each is a smaller hammer than the last. Examples use the 3B config; same flags work for any size:
 
 ```bash
 # 1. Halve seq_len (biggest single win, halves activation memory)
@@ -83,11 +85,11 @@ NGPU=2 MODULE=llama3 CONFIG=llama3_3b_tbn158 ./run_train.sh --activation_checkpo
 NGPU=2 MODULE=llama3 CONFIG=llama3_3b_tbn158 ./run_train.sh --training.enable_cpu_offload
 ```
 
-Stack flags as needed: `... --training.seq_len=2048 --training.local_batch_size=1 --activation_checkpoint.mode=full`. Swap `llama3_3b_tbn158` for `llama3_3b_bitnet158` or `llama3_3b` for the other flavors.
+Stack flags as needed: `... --training.seq_len=2048 --training.local_batch_size=1 --activation_checkpoint.mode=full`.
 
 ## Resume after a crash
 
-Same command. The trainer auto-resumes from the latest `./outputs/checkpoint/step-N/` (interval 500, latest 4 kept, ~38 GB each → ~150 GB total).
+Same command. The trainer auto-resumes from the latest `./outputs/checkpoint/step-N/` (interval 500, latest 4 kept). Per-checkpoint size scales with model: ~2 GB at 200M, ~6 GB at 500M, ~9 GB at 700M, ~38 GB at 3B.
 
 To pin a specific step: `--checkpoint.load_step=2500`.
 
