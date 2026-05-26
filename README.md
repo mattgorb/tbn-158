@@ -1,8 +1,8 @@
 # tbn-158
 
 Pretraining of Llama-3-style models with **BitNet b1.58** or **TBN-tiled
-b1.58** linear layers. HuggingFace `Trainer` + streaming **SlimPajama**.
-Stable PyTorch, no nightly drama.
+b1.58** linear layers. HuggingFace `Trainer` + streaming **FineWeb-Edu**
+(train) and **WikiText-103** (eval). Stable PyTorch, no nightly drama.
 
 ---
 
@@ -45,6 +45,18 @@ bash scripts/eval.sh outputs/3B_plain/final
 bash scripts/eval.sh outputs/3B_bitnet158/final
 bash scripts/eval.sh outputs/3B_tbn158/final
 ```
+
+### Paper-scale run (4× A100 80 GB, 100B tokens, tbn158 only)
+
+If you have 4 GPUs and want to match the BitNet paper's training-token budget:
+
+```bash
+accelerate launch --config_file configs/accelerate_fsdp_4gpu.yaml \
+    pretrain.py --size 3B --variant tbn158 \
+    --config configs/3B_tbn158_4gpu_100b.yaml --resume
+```
+
+100K steps × 1M tokens/step ≈ **105B tokens**. Expect multi-week wall-clock.
 
 ---
 
@@ -122,10 +134,10 @@ WandB runs are named `{size}_{variant}`; group via `WANDB_PROJECT` (default
 
 ## Eval
 
-**During training** — held-out SlimPajama perplexity logged to WandB every
-`eval_steps` (default 1000) over `eval_samples` sequences (default 512, ≈ 1M
-tokens). Logged keys: `eval/loss`, `eval/perplexity`,
-`train/num_input_tokens_seen`. Set `eval_samples: 0` to disable.
+**During training** — held-out WikiText-103 perplexity logged to WandB every
+`eval_steps` (default 1000) over `eval_samples` sequences (default 512). Logged
+keys: `eval/loss`, `eval/perplexity`, `train/num_input_tokens_seen`. Set
+`eval_samples: 0` to disable.
 
 **Post-hoc zero-shot** — [`scripts/eval.sh`](scripts/eval.sh) runs the BitNet
 paper's benchmark suite (HellaSwag, WinoGrande, ARC-e/c, PIQA, BoolQ, OBQA,
@@ -189,7 +201,7 @@ crashed at — optimizer-state shards (FSDP/ZeRO) are sized to it.
 
 ## Notes
 
-- SlimPajama streams from HuggingFace on demand. No upfront download, but needs
+- FineWeb-Edu streams from HuggingFace on demand. No upfront download, but needs
   internet during training.
 - Stable PyTorch (≥ 2.4) is sufficient. No nightly required.
 - Gradient checkpointing on by default; bf16 on by default.

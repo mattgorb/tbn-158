@@ -1,0 +1,22 @@
+# 3B / tbn158 — paper-grade target: 100B tokens on 4× A100 80 GB (FSDP).
+# Matches the BitNet b1.58 paper's training-token budget (arXiv:2402.17764).
+#
+# Launcher (must pass --config explicitly; this file is *not* auto-loaded):
+#   accelerate launch --config_file configs/accelerate_fsdp_4gpu.yaml \
+#       pretrain.py --size 3B --variant tbn158 \
+#       --config configs/3B_tbn158_4gpu_100b.yaml --resume
+#
+# Global batch = 2 × 4gpu × 64accum = 512 seqs × 2048 = 1.05M tokens/step.
+# 100000 steps × 1.05M ≈ 105B tokens (round number; close to paper's 100B).
+per_device_batch_size: 2
+gradient_accumulation_steps: 64
+seq_len: 2048
+lr: 3.0e-4
+steps: 100000
+warmup_steps: 2000
+weight_decay: 0.1
+save_steps: 2000
+save_total_limit: 4
+logging_steps: 50
+eval_steps: 2000
+eval_samples: 1024

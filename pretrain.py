@@ -1,5 +1,5 @@
 """Pretrain a Llama-3-style model with optional BitNet b1.58 / TBN b1.58
-linears, on streaming SlimPajama. Single-GPU friendly; uses HuggingFace Trainer.
+linears, on streaming FineWeb-Edu. Single-GPU friendly; uses HuggingFace Trainer.
 
 Usage
 -----
@@ -138,17 +138,32 @@ def resolve_settings(args: argparse.Namespace) -> dict:
 
 
 def build_dataset(tokenizer, seq_len: int, split: str = "train", take: int | None = None):
-    """Stream SlimPajama, tokenize, and pack into fixed seq_len blocks."""
-    raw = load_dataset("cerebras/SlimPajama-627B", split=split, streaming=True)
+    """Stream training/validation data, tokenize, and pack into seq_len blocks.
+
+    Train: HuggingFaceFW/fineweb-edu (sample-350BT subset — covers all budgets).
+    Val:   wikitext-103-raw-v1 validation — classic PPL benchmark.
+    """
+    if split == "train":
+        raw = load_dataset(
+            "HuggingFaceFW/fineweb-edu",
+            name="sample-350BT",
+            split="train",
+            streaming=True,
+        )
+    else:
+        raw = load_dataset(
+            "Salesforce/wikitext",
+            name="wikitext-103-raw-v1",
+            split=split,
+            streaming=True,
+        )
+
+    original_cols = list(raw.features.keys())
 
     def tokenize(batch):
         return tokenizer(batch["text"])
 
-    tokenized = raw.map(
-        tokenize,
-        batched=True,
-        remove_columns=["text", "meta"],
-    )
+    tokenized = raw.map(tokenize, batched=True, remove_columns=original_cols)
 
     def group_into_blocks(batch):
         concatenated = {k: list(chain(*batch[k])) for k in batch}
@@ -204,12 +219,12 @@ def main() -> None:
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    print("Streaming SlimPajama (cerebras/SlimPajama-627B, train split)")
+    print("Streaming FineWeb-Edu (HuggingFaceFW/fineweb-edu, sample-350BT)")
     train_ds = build_dataset(tokenizer, settings["seq_len"], split="train")
 
     eval_ds = None
     if settings["eval_samples"] > 0:
-        print(f"Streaming SlimPajama validation split for held-out PPL ({settings['eval_samples']} seqs)")
+        print(f"Streaming WikiText-103 validation for held-out PPL ({settings['eval_samples']} seqs)")
         eval_ds = build_dataset(
             tokenizer, settings["seq_len"], split="validation", take=settings["eval_samples"],
         )
