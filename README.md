@@ -76,6 +76,27 @@ python pretrain.py --size 700M --variant tbn158 \
     --lr 3e-4
 ```
 
+## Multi-GPU
+
+`Trainer` auto-switches to DDP under `torchrun`. No code changes.
+
+```bash
+# all visible GPUs on this node
+torchrun --nproc_per_node=$(nvidia-smi -L | wc -l) pretrain.py --size 700M --variant tbn158
+
+# specific GPUs
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 pretrain.py --size 700M --variant tbn158
+```
+
+`--per_device_batch_size` is **per GPU** — global batch scales with GPU count.
+
+For **3B**, DDP replicates the full model per GPU and will OOM. Run
+`accelerate config` once (pick FSDP or DeepSpeed ZeRO-2/3), then:
+
+```bash
+accelerate launch pretrain.py --size 3B --variant tbn158
+```
+
 ## If you OOM
 
 Apply in order:
@@ -94,12 +115,18 @@ turn it off (faster, more memory).
 ## Resume after a crash
 
 ```bash
+# single GPU
 python pretrain.py --size 200M --variant tbn158 --resume
+
+# multi-GPU — same launcher as the original run, just add --resume
+torchrun --nproc_per_node=4 pretrain.py --size 700M --variant tbn158 --resume
+accelerate launch pretrain.py --size 3B --variant tbn158 --resume
 ```
 
 Picks up from the latest `outputs/{size}_{variant}/checkpoint-N/` and restores
 model + optimizer + LR + dataloader state. Default retention: latest 4
-checkpoints, saved every 500 steps.
+checkpoints, saved every 500 steps. Relaunch with the **same world size** you
+crashed at — optimizer-state shards (FSDP/ZeRO) are sized to it.
 
 ## Notes
 
