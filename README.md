@@ -50,66 +50,66 @@ python -c "from bitnet import build_model; m = build_model('200M', 'tbn158'); pr
 The tokenizer auto-downloads on first run via `AutoTokenizer.from_pretrained` —
 no separate download step needed.
 
-## Train
+## Train — recommended runs
+
+Configs in [`configs/`](configs/) are tuned to a target token budget per size.
+Pick a `<variant>` ∈ `{plain, bitnet158, tbn158}` and run the matching launcher.
+Outputs land in `./outputs/{size}_{variant}/`.
 
 ```bash
-# smallest, fastest iteration
-python pretrain.py --size 200M --variant tbn158
+# 200M — 1× 48 GB GPU, ~2.1B tokens (8000 steps × 262K tokens/step)
+python pretrain.py --size 200M --variant <variant>
 
-# 700M (BitNet paper size)
-python pretrain.py --size 700M --variant bitnet158
+# 500M — 2× A100 80 GB (DDP), ~10B tokens (38000 steps)
+torchrun --nproc_per_node=2 pretrain.py --size 500M --variant <variant>
 
-# plain baseline for A/B
-python pretrain.py --size 200M --variant plain
+# 700M — 2× A100 80 GB (DDP), ~10B tokens (38000 steps)
+torchrun --nproc_per_node=2 pretrain.py --size 700M --variant <variant>
+
+# 3B — 2× A100 80 GB (FSDP via accelerate), ~10B tokens (38000 steps)
+accelerate launch --config_file configs/accelerate_fsdp_2gpu.yaml \
+    pretrain.py --size 3B --variant <variant>
 ```
 
-Outputs land in `./outputs/{size}_{variant}/`. WandB runs are named
-`{size}_{variant}`; group via env var `WANDB_PROJECT` (default `bitnet158`).
+Token budget summary (global batch is 128 sequences × 2048 tokens = 262K tokens/step everywhere):
+
+| Size  | Hardware            | Launcher              | Steps  | Tokens |
+| ----- | ------------------- | --------------------- | ------ | ------ |
+| 200M  | 1× 48 GB            | `python`              | 8,000  | ~2.1 B |
+| 500M  | 2× A100 80 GB       | `torchrun --nproc 2`  | 38,000 | ~10 B  |
+| 700M  | 2× A100 80 GB       | `torchrun --nproc 2`  | 38,000 | ~10 B  |
+| 3B    | 2× A100 80 GB FSDP  | `accelerate launch`   | 38,000 | ~10 B  |
+
+WandB runs are named `{size}_{variant}`; group via `WANDB_PROJECT` (default
+`bitnet158`).
+
+## Eval (held-out C4 perplexity)
+
+`pretrain.py` streams the C4 validation split, runs eval every `eval_steps`,
+and logs `eval/loss`, `eval/perplexity`, and `train/num_input_tokens_seen` to
+WandB/TensorBoard. Defaults: `eval_steps: 1000`, `eval_samples: 512` (≈ 1M
+tokens — enough for a stable PPL estimate). Set `eval_samples: 0` to disable.
+
+Downstream zero-shot benchmarks (ARC, HellaSwag, WinoGrande, PIQA, BoolQ) —
+run post-hoc against a saved checkpoint with
+[lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness).
 
 ## Configs
 
-Per-(size, variant) training hyperparams live in [`configs/`](configs/) as YAML
-— e.g. [`configs/700M_tbn158.yaml`](configs/700M_tbn158.yaml). `pretrain.py`
-auto-loads `configs/{size}_{variant}.yaml`. Override with `--config path.yaml`.
+Per-(size, variant) hyperparams live in [`configs/`](configs/) as YAML — e.g.
+[`configs/700M_tbn158.yaml`](configs/700M_tbn158.yaml). `pretrain.py`
+auto-loads `configs/{size}_{variant}.yaml`; override with `--config path.yaml`.
 
-Precedence: **CLI flag > YAML > built-in fallback**. So you can edit the YAML
-for persistent settings (good for OOM tweaks) and still override anything
-ad-hoc from the CLI:
+Precedence: **CLI flag > YAML > built-in fallback**. Edit the YAML for
+persistent changes; pass flags for one-off overrides:
 
 ```bash
 python pretrain.py --size 700M --variant tbn158 \
-    --per_device_batch_size 1 --gradient_accumulation_steps 8
+    --per_device_batch_size 1 --gradient_accumulation_steps 32
 ```
 
-Default per-size batch and lr (seeded into the configs, single 48 GB GPU):
-
-| Size  | `per_device_batch_size` | `lr`  |
-| ----- | ----------------------- | ----- |
-| 200M  | 16                      | 5e-4  |
-| 500M  | 8                       | 4e-4  |
-| 700M  | 4                       | 4e-4  |
-| 3B    | 1                       | 3e-4  |
-
-## Multi-GPU
-
-`Trainer` auto-switches to DDP under `torchrun`. No code changes.
-
-```bash
-# all visible GPUs on this node
-torchrun --nproc_per_node=$(nvidia-smi -L | wc -l) pretrain.py --size 700M --variant tbn158
-
-# specific GPUs
-CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 pretrain.py --size 700M --variant tbn158
-```
-
-`--per_device_batch_size` is **per GPU** — global batch scales with GPU count.
-
-For **3B**, DDP replicates the full model per GPU and will OOM. Run
-`accelerate config` once (pick FSDP or DeepSpeed ZeRO-2/3), then:
-
-```bash
-accelerate launch pretrain.py --size 3B --variant tbn158
-```
+`--per_device_batch_size` is **per GPU** under `torchrun` / `accelerate`, so
+global batch = `per_device_batch_size × num_gpus × gradient_accumulation_steps`.
 
 ## If you OOM
 

@@ -21,6 +21,7 @@ configs/{size}_{variant}.yaml — edit there for persistent OOM tweaks.
 """
 
 import argparse
+import math
 import os
 from itertools import chain
 from pathlib import Path
@@ -50,6 +51,9 @@ BUILTIN_DEFAULTS = {
     "save_total_limit": 4,
     "logging_steps": 10,
     "no_gradient_checkpointing": False,
+    # C4 validation perplexity. Set eval_samples: 0 to disable.
+    "eval_steps": 1000,
+    "eval_samples": 512,
 }
 
 # Fields that may appear in YAML configs and as CLI overrides.
@@ -96,6 +100,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--save_steps", type=int, default=argparse.SUPPRESS)
     p.add_argument("--save_total_limit", type=int, default=argparse.SUPPRESS)
     p.add_argument("--logging_steps", type=int, default=argparse.SUPPRESS)
+    p.add_argument("--eval_steps", type=int, default=argparse.SUPPRESS)
+    p.add_argument(
+        "--eval_samples",
+        type=int,
+        default=argparse.SUPPRESS,
+        help="Number of C4-validation sequences for held-out PPL. 0 disables eval.",
+    )
     p.add_argument(
         "--no_gradient_checkpointing",
         action="store_true",
@@ -126,9 +137,9 @@ def resolve_settings(args: argparse.Namespace) -> dict:
     return {**BUILTIN_DEFAULTS, **config, **cli_explicit}
 
 
-def build_dataset(tokenizer, seq_len: int):
+def build_dataset(tokenizer, seq_len: int, split: str = "train", take: int | None = None):
     """Stream C4, tokenize, and pack into fixed seq_len blocks."""
-    raw = load_dataset("allenai/c4", "en", split="train", streaming=True)
+    raw = load_dataset("allenai/c4", "en", split=split, streaming=True)
 
     def tokenize(batch):
         return tokenizer(batch["text"])
@@ -149,7 +160,20 @@ def build_dataset(tokenizer, seq_len: int):
         result["labels"] = [list(ids) for ids in result["input_ids"]]
         return result
 
-    return tokenized.map(group_into_blocks, batched=True)
+    packed = tokenized.map(group_into_blocks, batched=True)
+    return packed.take(take) if take else packed
+
+
+class TrainerWithPerplexity(Trainer):
+    """Trainer that also logs `eval_perplexity = exp(eval_loss)`."""
+
+    def evaluate(self, *args, **kwargs):
+        metrics = super().evaluate(*args, **kwargs)
+        if "eval_loss" in metrics:
+            ppl = math.exp(metrics["eval_loss"])
+            metrics["eval_perplexity"] = ppl
+            self.log({"eval_perplexity": ppl})
+        return metrics
 
 
 def find_latest_checkpoint(output_dir: str) -> str | None:
@@ -180,8 +204,15 @@ def main() -> None:
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    print("Streaming C4 (allenai/c4, en split)")
-    train_ds = build_dataset(tokenizer, settings["seq_len"])
+    print("Streaming C4 (allenai/c4, en, train split)")
+    train_ds = build_dataset(tokenizer, settings["seq_len"], split="train")
+
+    eval_ds = None
+    if settings["eval_samples"] > 0:
+        print(f"Streaming C4 validation split for held-out PPL ({settings['eval_samples']} seqs)")
+        eval_ds = build_dataset(
+            tokenizer, settings["seq_len"], split="validation", take=settings["eval_samples"],
+        )
 
     os.environ.setdefault("WANDB_PROJECT", args.wandb_project)
 
@@ -189,6 +220,7 @@ def main() -> None:
         output_dir=output_dir,
         run_name=run_name,
         per_device_train_batch_size=settings["per_device_batch_size"],
+        per_device_eval_batch_size=settings["per_device_batch_size"],
         gradient_accumulation_steps=settings["gradient_accumulation_steps"],
         max_steps=settings["steps"],
         warmup_steps=settings["warmup_steps"],
@@ -198,6 +230,8 @@ def main() -> None:
         logging_steps=settings["logging_steps"],
         save_steps=settings["save_steps"],
         save_total_limit=settings["save_total_limit"],
+        eval_strategy="steps" if eval_ds is not None else "no",
+        eval_steps=settings["eval_steps"],
         bf16=True,
         gradient_checkpointing=not settings["no_gradient_checkpointing"],
         dataloader_num_workers=2,
@@ -205,12 +239,15 @@ def main() -> None:
         max_grad_norm=1.0,
         # Streaming datasets have no __len__; required so Trainer doesn't try.
         ignore_data_skip=True,
+        # Logs `train/num_input_tokens_seen` to WandB/TensorBoard.
+        include_num_input_tokens_seen=True,
     )
 
-    trainer = Trainer(
+    trainer = TrainerWithPerplexity(
         model=model,
         args=training_args,
         train_dataset=train_ds,
+        eval_dataset=eval_ds,
         data_collator=default_data_collator,
     )
 

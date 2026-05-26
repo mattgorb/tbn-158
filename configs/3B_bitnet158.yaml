@@ -1,13 +1,14 @@
-# 3B / bitnet158 — single 48 GB GPU baseline. Tight; use accumulation for
-# larger effective batch. For multi-GPU, prefer FSDP/ZeRO via `accelerate launch`.
-per_device_batch_size: 1
-gradient_accumulation_steps: 8
+# 3B / bitnet158 — target 10B tokens on 2× A100 80 GB (FSDP via accelerate).
+# Launcher: accelerate launch --config_file configs/accelerate_fsdp_2gpu.yaml \
+#               pretrain.py --size 3B --variant bitnet158
+# Global batch = 2 × 2gpu × 32accum = 128 seqs × 2048 = 262K tokens/step → 38000 steps ≈ 10B tokens.
+per_device_batch_size: 2
+gradient_accumulation_steps: 32
 seq_len: 2048
 lr: 3.0e-4
-steps: 10000
-warmup_steps: 500
+steps: 38000
+warmup_steps: 1000
 weight_decay: 0.1
-save_steps: 500
+save_steps: 1000
 save_total_limit: 4
 logging_steps: 10
-no_gradient_checkpointing: false

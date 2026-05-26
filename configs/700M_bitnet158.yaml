@@ -1,14 +1,13 @@
-# 700M / bitnet158 — single 48 GB GPU baseline (BitNet paper size).
-# If you OOM: lower per_device_batch_size, raise gradient_accumulation_steps
-# to recover the effective batch, then drop seq_len as a last resort.
+# 700M / bitnet158 (BitNet paper size) — target 10B tokens on 2× A100 80 GB (DDP).
+# Launcher: torchrun --nproc_per_node=2 pretrain.py --size 700M --variant bitnet158
+# Global batch = 4 × 2gpu × 16accum = 128 seqs × 2048 = 262K tokens/step → 38000 steps ≈ 10B tokens.
 per_device_batch_size: 4
-gradient_accumulation_steps: 1
+gradient_accumulation_steps: 16
 seq_len: 2048
 lr: 4.0e-4
-steps: 10000
-warmup_steps: 500
+steps: 38000
+warmup_steps: 1000
 weight_decay: 0.1
-save_steps: 500
+save_steps: 1000
 save_total_limit: 4
 logging_steps: 10
-no_gradient_checkpointing: false
