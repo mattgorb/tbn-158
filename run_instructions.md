@@ -16,13 +16,65 @@ Linear flavors:
 
 WandB + checkpointing are on by default.
 
-## Setup
+## Environment (do this first)
+
+Torchtitan tracks **PyTorch nightly**. Stable releases (2.6, 2.7) are missing
+APIs the code uses. Don't try to make it work in an arbitrary conda env or a
+Jupyter image with old torch — you'll lose a day to import errors. Start from
+a container with a recent torch nightly preinstalled.
+
+**Recommended: NVIDIA NGC PyTorch container.**
+Ships with Python 3.12, CUDA 12.x, and current torch. Free, no build.
+
+```bash
+# Replace 25.04 with the latest tag from https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch
+docker run --gpus all -it --rm \
+    -v $HOME/torchtitan-tbn-158:/workspace/torchtitan-tbn-158 \
+    -w /workspace/torchtitan-tbn-158 \
+    nvcr.io/nvidia/pytorch:25.04-py3 bash
+```
+
+**Alternative: PyTorch official dev image.**
+
+```bash
+docker run --gpus all -it --rm \
+    -v $HOME/torchtitan-tbn-158:/workspace/torchtitan-tbn-158 \
+    -w /workspace/torchtitan-tbn-158 \
+    pytorch/pytorch:2.9.0-cuda12.8-cudnn9-devel bash
+```
+
+**Alternative: pip install nightly into an existing env.**
+Only do this if you control the env and torch isn't preinstalled or you can
+fully uninstall it. Match `cu124` / `cu126` / `cu128` to your CUDA driver
+(`nvidia-smi` top right).
+
+```bash
+pip uninstall -y torch torchvision torchaudio
+pip install --pre torch --index-url https://download.pytorch.org/whl/nightly/cu128
+```
+
+Verify torch has the APIs torchtitan needs:
+
+```bash
+python -c "
+import torch
+print(torch.__version__)
+from torch.distributed.tensor import DTensor
+from torch.distributed.checkpoint import HuggingFaceStorageWriter
+from torch.distributed.checkpoint.staging import DefaultStager
+print('environment is good')
+"
+```
+
+If `environment is good` doesn't print, **stop and fix the env first** before touching anything else.
+
+## Setup (after the env is good)
 
 ```bash
 pip install -r requirements.txt
 huggingface-cli login           # for the gated Llama-3.2 tokenizer
 wandb login                     # paste API key once
-export WANDB_PROJECT=tbn158     
+export WANDB_PROJECT=tbn158
 
 python scripts/download_hf_assets.py \
     --repo_id meta-llama/Llama-3.2-3B \
