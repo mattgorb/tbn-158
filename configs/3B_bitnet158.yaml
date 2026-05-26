@@ -1,7 +1,7 @@
 # 3B / bitnet158 — single 48 GB GPU baseline. Tight; use accumulation for
 # larger effective batch. For multi-GPU, prefer FSDP/ZeRO via `accelerate launch`.
 per_device_batch_size: 1
-gradient_accumulation_steps: 1
+gradient_accumulation_steps: 8
 seq_len: 2048
 lr: 3.0e-4
 steps: 10000
