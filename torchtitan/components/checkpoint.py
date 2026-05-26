@@ -25,14 +25,34 @@ import torch.nn as nn
 try:
     from torch.distributed.checkpoint import HuggingFaceStorageWriter
 except ImportError:
-    # Older torch versions kept this as a private API. Drop this branch once
-    # the minimum supported torch is past the private→public rename.
-    from torch.distributed.checkpoint import (
-        _HuggingFaceStorageWriter as HuggingFaceStorageWriter,
+    try:
+        # Older torch nightlies kept this as a private API before the
+        # private→public rename.
+        from torch.distributed.checkpoint import (
+            _HuggingFaceStorageWriter as HuggingFaceStorageWriter,
+        )
+    except ImportError:
+        # Torch lacks the HF storage writer entirely. Only an issue if the
+        # user opts into ``last_save_in_hf`` / ``initial_load_in_hf``; the
+        # default DCP path doesn't touch this class.
+        class HuggingFaceStorageWriter:  # type: ignore[no-redef]
+            def __init__(self, *args, **kwargs):
+                raise RuntimeError(
+                    "HuggingFaceStorageWriter is not available in this torch "
+                    f"({torch.__version__}). Upgrade torch (nightly recommended) "
+                    "or disable last_save_in_hf / initial_load_in_hf in your config."
+                )
+
+try:
+    from torch.distributed.checkpoint._consolidate_hf_safetensors import (
+        consolidate_safetensors_files_on_every_rank,
     )
-from torch.distributed.checkpoint._consolidate_hf_safetensors import (
-    consolidate_safetensors_files_on_every_rank,
-)
+except ImportError:
+    def consolidate_safetensors_files_on_every_rank(*args, **kwargs):
+        raise RuntimeError(
+            "consolidate_safetensors_files_on_every_rank is not available in "
+            f"this torch ({torch.__version__}). Same fix as above."
+        )
 from torch.distributed.checkpoint.staging import DefaultStager, StagingOptions
 from torch.distributed.checkpoint.state_dict import (
     get_model_state_dict,
