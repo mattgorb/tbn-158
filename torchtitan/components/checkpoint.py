@@ -53,7 +53,26 @@ except ImportError:
             "consolidate_safetensors_files_on_every_rank is not available in "
             f"this torch ({torch.__version__}). Same fix as above."
         )
-from torch.distributed.checkpoint.staging import DefaultStager, StagingOptions
+try:
+    from torch.distributed.checkpoint.staging import DefaultStager, StagingOptions
+except ImportError:
+    # Torch lacks the staging APIs. Only an issue if the user opts into
+    # ``async_mode="async_with_pinned_mem"``; the default "disabled" path
+    # doesn't touch these classes.
+    class StagingOptions:  # type: ignore[no-redef]
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError(
+                "StagingOptions is not available in this torch "
+                f"({torch.__version__}). Upgrade torch (nightly recommended) "
+                "or use checkpoint.async_mode='disabled' / 'async'."
+            )
+
+    class DefaultStager:  # type: ignore[no-redef]
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError(
+                "DefaultStager is not available in this torch "
+                f"({torch.__version__}). Same fix as above."
+            )
 from torch.distributed.checkpoint.state_dict import (
     get_model_state_dict,
     set_model_state_dict,
