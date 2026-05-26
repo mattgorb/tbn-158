@@ -1,4 +1,0 @@
-av
-einops
-pillow
-torchvision
