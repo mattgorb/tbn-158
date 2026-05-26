@@ -24,9 +24,17 @@ Embeddings and `lm_head` stay full precision in every variant, per the b1.58 pap
 
 ## Setup
 
+Check each host's max CUDA with `nvidia-smi` (top-right cell), then pick the
+matching wheel index. Install the torch trio together so versions stay in sync:
+
+- Wheel selector: <https://pytorch.org/get-started/locally/>
+- Pinned versions (find `2.5.1`): <https://pytorch.org/get-started/previous-versions/>
+
 ```bash
-# 1. torch matched to your CUDA (cu124 / cu126 / cu128 / cu130 / cpu)
-pip install torch --index-url https://download.pytorch.org/whl/cu124
+# 1. torch + torchvision + torchaudio, matched trio on your CUDA wheel index
+pip install --force-reinstall \
+    "torch==2.5.1" "torchvision==0.20.1" "torchaudio==2.5.1" \
+    --index-url https://download.pytorch.org/whl/cu124
 
 # 2. everything else
 pip install -r requirements.txt
@@ -58,23 +66,29 @@ python pretrain.py --size 200M --variant plain
 Outputs land in `./outputs/{size}_{variant}/`. WandB runs are named
 `{size}_{variant}`; group via env var `WANDB_PROJECT` (default `bitnet158`).
 
-## Per-size defaults (single 48 GB GPU)
+## Configs
 
-| Size  | `--per_device_batch_size` | `--lr`  |
-| ----- | ------------------------- | ------- |
-| 200M  | 16                        | 5e-4    |
-| 500M  | 8                         | 4e-4    |
-| 700M  | 4                         | 4e-4    |
-| 3B    | 1                         | 3e-4    |
+Per-(size, variant) training hyperparams live in [`configs/`](configs/) as YAML
+— e.g. [`configs/700M_tbn158.yaml`](configs/700M_tbn158.yaml). `pretrain.py`
+auto-loads `configs/{size}_{variant}.yaml`. Override with `--config path.yaml`.
 
-Override anything from the CLI:
+Precedence: **CLI flag > YAML > built-in fallback**. So you can edit the YAML
+for persistent settings (good for OOM tweaks) and still override anything
+ad-hoc from the CLI:
 
 ```bash
 python pretrain.py --size 700M --variant tbn158 \
-    --steps 50000 --warmup_steps 1000 \
-    --per_device_batch_size 2 --gradient_accumulation_steps 4 \
-    --lr 3e-4
+    --per_device_batch_size 1 --gradient_accumulation_steps 8
 ```
+
+Default per-size batch and lr (seeded into the configs, single 48 GB GPU):
+
+| Size  | `per_device_batch_size` | `lr`  |
+| ----- | ----------------------- | ----- |
+| 200M  | 16                      | 5e-4  |
+| 500M  | 8                       | 4e-4  |
+| 700M  | 4                       | 4e-4  |
+| 3B    | 1                       | 3e-4  |
 
 ## Multi-GPU
 
@@ -99,18 +113,20 @@ accelerate launch pretrain.py --size 3B --variant tbn158
 
 ## If you OOM
 
+Edit `configs/{size}_{variant}.yaml` (persistent) or pass flags (one-off).
 Apply in order:
 
-```bash
-# 1. shorter sequences
-python pretrain.py ... --seq_len 1024
+```yaml
+# 1. smaller batch, recover effective batch with accumulation
+per_device_batch_size: 1
+gradient_accumulation_steps: 8
 
-# 2. smaller batch, recover effective batch with accumulation
-python pretrain.py ... --per_device_batch_size 1 --gradient_accumulation_steps 8
+# 2. shorter sequences
+seq_len: 1024
 ```
 
-Gradient checkpointing is on by default. Use `--no_gradient_checkpointing` to
-turn it off (faster, more memory).
+Gradient checkpointing is on by default. Set `no_gradient_checkpointing: true`
+to turn it off (faster, more memory).
 
 ## Resume after a crash
 

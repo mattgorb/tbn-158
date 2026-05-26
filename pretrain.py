@@ -3,18 +3,21 @@ linears, on streaming C4. Single-GPU friendly; uses HuggingFace Trainer.
 
 Usage
 -----
-    # Smallest model, TBN-tiled b1.58:
+    # Smallest model, TBN-tiled b1.58 — uses configs/200M_tbn158.yaml:
     python pretrain.py --size 200M --variant tbn158
 
-    # 700M plain baseline, override training length:
-    python pretrain.py --size 700M --variant plain --steps 50000
+    # Override any config value from the CLI (precedence: CLI > YAML > built-in):
+    python pretrain.py --size 700M --variant tbn158 --per_device_batch_size 1
+
+    # Point at an explicit config file:
+    python pretrain.py --size 200M --variant tbn158 --config configs/my_run.yaml
 
     # Resume from the latest checkpoint in --output_dir:
     python pretrain.py --size 200M --variant tbn158 --resume
 
 All four sizes (200M / 500M / 700M / 3B) and three variants (plain /
-bitnet158 / tbn158) are supported. Per-size batch and learning-rate defaults
-target a single 48 GB GPU (A6000); override with CLI flags.
+bitnet158 / tbn158) are supported. Per-(size, variant) defaults live in
+configs/{size}_{variant}.yaml — edit there for persistent OOM tweaks.
 """
 
 import argparse
@@ -22,6 +25,7 @@ import os
 from itertools import chain
 from pathlib import Path
 
+import yaml
 from datasets import load_dataset
 from transformers import (
     AutoTokenizer,
@@ -33,28 +37,33 @@ from transformers import (
 from bitnet import LINEAR_FACTORIES, SIZE_HPARAMS, build_model
 
 
-# Per-size defaults tuned for a single 48 GB GPU. Override with CLI flags.
-SIZE_DEFAULTS = {
-    "200M": dict(per_device_batch_size=16, lr=5e-4),
-    "500M": dict(per_device_batch_size=8, lr=4e-4),
-    "700M": dict(per_device_batch_size=4, lr=4e-4),
-    "3B": dict(per_device_batch_size=1, lr=3e-4),
+# Final fallback if no YAML is found and no CLI flag is given.
+BUILTIN_DEFAULTS = {
+    "per_device_batch_size": 1,
+    "gradient_accumulation_steps": 1,
+    "seq_len": 2048,
+    "steps": 10000,
+    "warmup_steps": 500,
+    "lr": 3e-4,
+    "weight_decay": 0.1,
+    "save_steps": 500,
+    "save_total_limit": 4,
+    "logging_steps": 10,
+    "no_gradient_checkpointing": False,
 }
+
+# Fields that may appear in YAML configs and as CLI overrides.
+OVERRIDABLE = set(BUILTIN_DEFAULTS)
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("--size", choices=list(SIZE_HPARAMS), required=True)
+    p.add_argument("--variant", choices=list(LINEAR_FACTORIES), required=True)
     p.add_argument(
-        "--size",
-        choices=list(SIZE_HPARAMS),
-        required=True,
-        help="Model size.",
-    )
-    p.add_argument(
-        "--variant",
-        choices=list(LINEAR_FACTORIES),
-        required=True,
-        help="Linear flavor used inside attention/FFN.",
+        "--config",
+        default=None,
+        help="YAML config path. Default: configs/{size}_{variant}.yaml if it exists.",
     )
     p.add_argument(
         "--tokenizer",
@@ -66,29 +75,55 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Default: ./outputs/{size}_{variant}/",
     )
-    p.add_argument("--seq_len", type=int, default=2048)
-    p.add_argument("--per_device_batch_size", type=int, default=None)
-    p.add_argument("--gradient_accumulation_steps", type=int, default=1)
-    p.add_argument("--steps", type=int, default=10000)
-    p.add_argument("--warmup_steps", type=int, default=500)
-    p.add_argument("--lr", type=float, default=None)
-    p.add_argument("--weight_decay", type=float, default=0.1)
-    p.add_argument("--save_steps", type=int, default=500)
-    p.add_argument("--save_total_limit", type=int, default=4)
-    p.add_argument("--logging_steps", type=int, default=10)
     p.add_argument("--wandb_project", default="bitnet158")
     p.add_argument("--run_name", default=None)
-    p.add_argument(
-        "--no_gradient_checkpointing",
-        action="store_true",
-        help="Disable gradient checkpointing (faster, more memory).",
-    )
     p.add_argument(
         "--resume",
         action="store_true",
         help="Auto-resume from the latest checkpoint in --output_dir.",
     )
+
+    # Overridable fields — use SUPPRESS so we can tell whether the user
+    # passed them explicitly. Anything omitted from CLI falls back to the
+    # YAML config, then to BUILTIN_DEFAULTS.
+    p.add_argument("--seq_len", type=int, default=argparse.SUPPRESS)
+    p.add_argument("--per_device_batch_size", type=int, default=argparse.SUPPRESS)
+    p.add_argument("--gradient_accumulation_steps", type=int, default=argparse.SUPPRESS)
+    p.add_argument("--steps", type=int, default=argparse.SUPPRESS)
+    p.add_argument("--warmup_steps", type=int, default=argparse.SUPPRESS)
+    p.add_argument("--lr", type=float, default=argparse.SUPPRESS)
+    p.add_argument("--weight_decay", type=float, default=argparse.SUPPRESS)
+    p.add_argument("--save_steps", type=int, default=argparse.SUPPRESS)
+    p.add_argument("--save_total_limit", type=int, default=argparse.SUPPRESS)
+    p.add_argument("--logging_steps", type=int, default=argparse.SUPPRESS)
+    p.add_argument(
+        "--no_gradient_checkpointing",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Disable gradient checkpointing (faster, more memory).",
+    )
     return p.parse_args()
+
+
+def load_config(path: str | None, size: str, variant: str) -> dict:
+    if path is None:
+        default_path = Path(f"configs/{size}_{variant}.yaml")
+        if not default_path.exists():
+            return {}
+        path = str(default_path)
+    with open(path) as f:
+        loaded = yaml.safe_load(f) or {}
+    unknown = set(loaded) - OVERRIDABLE
+    if unknown:
+        raise ValueError(f"Unknown keys in {path}: {sorted(unknown)}")
+    return loaded
+
+
+def resolve_settings(args: argparse.Namespace) -> dict:
+    """Merge precedence: CLI explicit > YAML config > BUILTIN_DEFAULTS."""
+    config = load_config(args.config, args.size, args.variant)
+    cli_explicit = {k: v for k, v in vars(args).items() if k in OVERRIDABLE}
+    return {**BUILTIN_DEFAULTS, **config, **cli_explicit}
 
 
 def build_dataset(tokenizer, seq_len: int):
@@ -127,21 +162,18 @@ def find_latest_checkpoint(output_dir: str) -> str | None:
 
 def main() -> None:
     args = parse_args()
+    settings = resolve_settings(args)
 
-    defaults = SIZE_DEFAULTS[args.size]
-    if args.per_device_batch_size is None:
-        args.per_device_batch_size = defaults["per_device_batch_size"]
-    if args.lr is None:
-        args.lr = defaults["lr"]
-    if args.output_dir is None:
-        args.output_dir = f"./outputs/{args.size}_{args.variant}"
-    if args.run_name is None:
-        args.run_name = f"{args.size}_{args.variant}"
+    output_dir = args.output_dir or f"./outputs/{args.size}_{args.variant}"
+    run_name = args.run_name or f"{args.size}_{args.variant}"
 
     print(f"Building model: {args.size} / {args.variant}")
     model = build_model(args.size, args.variant)
     num_params = sum(p.numel() for p in model.parameters())
     print(f"  parameters: {num_params:,}")
+    print("Settings:")
+    for k in sorted(settings):
+        print(f"  {k}: {settings[k]}")
 
     print(f"Loading tokenizer: {args.tokenizer}")
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
@@ -149,25 +181,25 @@ def main() -> None:
         tokenizer.pad_token = tokenizer.eos_token
 
     print("Streaming C4 (allenai/c4, en split)")
-    train_ds = build_dataset(tokenizer, args.seq_len)
+    train_ds = build_dataset(tokenizer, settings["seq_len"])
 
     os.environ.setdefault("WANDB_PROJECT", args.wandb_project)
 
     training_args = TrainingArguments(
-        output_dir=args.output_dir,
-        run_name=args.run_name,
-        per_device_train_batch_size=args.per_device_batch_size,
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-        max_steps=args.steps,
-        warmup_steps=args.warmup_steps,
-        learning_rate=args.lr,
-        weight_decay=args.weight_decay,
+        output_dir=output_dir,
+        run_name=run_name,
+        per_device_train_batch_size=settings["per_device_batch_size"],
+        gradient_accumulation_steps=settings["gradient_accumulation_steps"],
+        max_steps=settings["steps"],
+        warmup_steps=settings["warmup_steps"],
+        learning_rate=settings["lr"],
+        weight_decay=settings["weight_decay"],
         lr_scheduler_type="cosine",
-        logging_steps=args.logging_steps,
-        save_steps=args.save_steps,
-        save_total_limit=args.save_total_limit,
+        logging_steps=settings["logging_steps"],
+        save_steps=settings["save_steps"],
+        save_total_limit=settings["save_total_limit"],
         bf16=True,
-        gradient_checkpointing=not args.no_gradient_checkpointing,
+        gradient_checkpointing=not settings["no_gradient_checkpointing"],
         dataloader_num_workers=2,
         report_to=["wandb", "tensorboard"],
         max_grad_norm=1.0,
@@ -182,12 +214,12 @@ def main() -> None:
         data_collator=default_data_collator,
     )
 
-    resume_from = find_latest_checkpoint(args.output_dir) if args.resume else None
+    resume_from = find_latest_checkpoint(output_dir) if args.resume else None
     if args.resume:
         print(f"Resume requested; latest checkpoint: {resume_from or '(none — starting fresh)'}")
 
     trainer.train(resume_from_checkpoint=resume_from)
-    final_dir = os.path.join(args.output_dir, "final")
+    final_dir = os.path.join(output_dir, "final")
     trainer.save_model(final_dir)
     print(f"Saved final model to {final_dir}")
 

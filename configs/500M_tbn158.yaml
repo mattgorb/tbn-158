@@ -1,0 +1,14 @@
+# 500M / tbn158 — single 48 GB GPU baseline.
+# If you OOM: lower per_device_batch_size, raise gradient_accumulation_steps
+# to recover the effective batch, then drop seq_len as a last resort.
+per_device_batch_size: 8
+gradient_accumulation_steps: 1
+seq_len: 2048
+lr: 4.0e-4
+steps: 10000
+warmup_steps: 500
+weight_decay: 0.1
+save_steps: 500
+save_total_limit: 4
+logging_steps: 10
+no_gradient_checkpointing: false
