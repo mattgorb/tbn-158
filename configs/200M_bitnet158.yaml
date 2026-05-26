@@ -1,8 +1,8 @@
 # 200M / bitnet158 — single 48 GB GPU baseline.
 # If you OOM: lower per_device_batch_size, raise gradient_accumulation_steps
 # to recover the effective batch, then drop seq_len as a last resort.
-per_device_batch_size: 16
-gradient_accumulation_steps: 1
+per_device_batch_size: 8
+gradient_accumulation_steps: 16
 seq_len: 2048
 lr: 5.0e-4
 steps: 10000
