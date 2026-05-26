@@ -3,7 +3,7 @@
 # (no nightly required) — e.g.:
 #   pip install torch --index-url https://download.pytorch.org/whl/cu124
 
-torch >= 2.5, < 3
+torch >= 2.6, < 3
 transformers >= 4.45
 accelerate >= 1.0
 datasets >= 3.0
