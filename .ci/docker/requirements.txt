@@ -1,3 +1,10 @@
+# torchtitan tracks PyTorch nightly. Stable releases (2.6, 2.7) are missing
+# APIs the codebase uses (e.g. torch.distributed.checkpoint.HuggingFaceStorageWriter
+# only landed in nightlies). Install with:
+#   pip install --pre --upgrade torch torchvision torchaudio \
+#       --index-url https://download.pytorch.org/whl/nightly/cu124
+# Floor below is the bare minimum for the public torch.distributed.tensor.DTensor
+# path; nightly is strongly preferred.
 torch >= 2.6
 torchdata >= 0.8.0
 datasets >= 3.6.0, < 4.8.0
