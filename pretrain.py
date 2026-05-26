@@ -1,5 +1,5 @@
 """Pretrain a Llama-3-style model with optional BitNet b1.58 / TBN b1.58
-linears, on streaming C4. Single-GPU friendly; uses HuggingFace Trainer.
+linears, on streaming SlimPajama. Single-GPU friendly; uses HuggingFace Trainer.
 
 Usage
 -----
@@ -138,8 +138,8 @@ def resolve_settings(args: argparse.Namespace) -> dict:
 
 
 def build_dataset(tokenizer, seq_len: int, split: str = "train", take: int | None = None):
-    """Stream C4, tokenize, and pack into fixed seq_len blocks."""
-    raw = load_dataset("allenai/c4", "en", split=split, streaming=True)
+    """Stream SlimPajama, tokenize, and pack into fixed seq_len blocks."""
+    raw = load_dataset("cerebras/SlimPajama-627B", split=split, streaming=True)
 
     def tokenize(batch):
         return tokenizer(batch["text"])
@@ -147,7 +147,7 @@ def build_dataset(tokenizer, seq_len: int, split: str = "train", take: int | Non
     tokenized = raw.map(
         tokenize,
         batched=True,
-        remove_columns=["text", "timestamp", "url"],
+        remove_columns=["text", "meta"],
     )
 
     def group_into_blocks(batch):
@@ -204,12 +204,12 @@ def main() -> None:
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    print("Streaming C4 (allenai/c4, en, train split)")
+    print("Streaming SlimPajama (cerebras/SlimPajama-627B, train split)")
     train_ds = build_dataset(tokenizer, settings["seq_len"], split="train")
 
     eval_ds = None
     if settings["eval_samples"] > 0:
-        print(f"Streaming C4 validation split for held-out PPL ({settings['eval_samples']} seqs)")
+        print(f"Streaming SlimPajama validation split for held-out PPL ({settings['eval_samples']} seqs)")
         eval_ds = build_dataset(
             tokenizer, settings["seq_len"], split="validation", take=settings["eval_samples"],
         )

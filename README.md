@@ -1,17 +1,60 @@
 # tbn-158
 
-Single-GPU pretraining of Llama-3-style models with **BitNet b1.58** or
-**TBN-tiled b1.58** linear layers. HuggingFace `Trainer` + streaming C4.
+Pretraining of Llama-3-style models with **BitNet b1.58** or **TBN-tiled
+b1.58** linear layers. HuggingFace `Trainer` + streaming **SlimPajama**.
 Stable PyTorch, no nightly drama.
+
+---
+
+## Smoke test first (30-60 seconds)
+
+Before any long run, verify end-to-end training works on the 200M model:
+
+```bash
+bash scripts/smoke_test.sh           # tbn158 by default
+bash scripts/smoke_test.sh plain     # or another variant
+```
+
+Runs 1 optimizer step + 1 full eval round, saves a checkpoint, and confirms
+WandB logging works. Outputs go to `outputs/smoke_test/` (won't pollute real runs).
+
+---
+
+## 🚀 Run the 3B sweep (the main thing)
+
+After [Setup](#setup), on 2× A100 80 GB:
+
+```bash
+bash scripts/train_3b_all.sh
+```
+
+This trains all three 3B variants (`plain` → `bitnet158` → `tbn158`)
+sequentially via FSDP, ~10B tokens each. Crash-safe: rerun the same command
+and each variant resumes from its latest checkpoint. Stdout/stderr is tee'd
+to `logs/3B_<variant>.log`.
+
+**WandB**: open the `bitnet158` project — `train/num_input_tokens_seen`
+climbs linearly from 0 to ~10B over each run; `eval/perplexity` is logged
+every 1000 steps against the SlimPajama validation split.
+
+Then evaluate each final checkpoint on the BitNet paper's zero-shot suite
+(HellaSwag, WinoGrande, ARC-e/c, PIQA, BoolQ, OBQA, LAMBADA):
+
+```bash
+bash scripts/eval.sh outputs/3B_plain/final
+bash scripts/eval.sh outputs/3B_bitnet158/final
+bash scripts/eval.sh outputs/3B_tbn158/final
+```
+
+---
 
 ## Sizes and variants
 
-Four sizes ([bitnet/model.py](bitnet/model.py)):
+Three sizes ([bitnet/model.py](bitnet/model.py)):
 
 | Size  | Architecture                                        |
 | ----- | --------------------------------------------------- |
 | 200M  | dim=768,  16 layers, GQA 12/4                       |
-| 500M  | dim=1024, 28 layers, GQA 16/4                       |
 | 700M  | dim=1536, 24 layers, GQA 24/8 *(BitNet paper size)* |
 | 3B    | dim=3072, 28 layers, GQA 24/8                       |
 
@@ -60,15 +103,10 @@ Outputs land in `./outputs/{size}_{variant}/`.
 # 200M — 1× 48 GB GPU, ~2.1B tokens (8000 steps × 262K tokens/step)
 python pretrain.py --size 200M --variant <variant>
 
-# 500M — 2× A100 80 GB (DDP), ~10B tokens (38000 steps)
-torchrun --nproc_per_node=2 pretrain.py --size 500M --variant <variant>
-
 # 700M — 2× A100 80 GB (DDP), ~10B tokens (38000 steps)
 torchrun --nproc_per_node=2 pretrain.py --size 700M --variant <variant>
 
-# 3B — 2× A100 80 GB (FSDP via accelerate), ~10B tokens (38000 steps)
-accelerate launch --config_file configs/accelerate_fsdp_2gpu.yaml \
-    pretrain.py --size 3B --variant <variant>
+# 3B — see `scripts/train_3b_all.sh` (FSDP via accelerate, all 3 variants)
 ```
 
 Token budget summary (global batch is 128 sequences × 2048 tokens = 262K tokens/step everywhere):
@@ -76,23 +114,28 @@ Token budget summary (global batch is 128 sequences × 2048 tokens = 262K tokens
 | Size  | Hardware            | Launcher              | Steps  | Tokens |
 | ----- | ------------------- | --------------------- | ------ | ------ |
 | 200M  | 1× 48 GB            | `python`              | 8,000  | ~2.1 B |
-| 500M  | 2× A100 80 GB       | `torchrun --nproc 2`  | 38,000 | ~10 B  |
 | 700M  | 2× A100 80 GB       | `torchrun --nproc 2`  | 38,000 | ~10 B  |
-| 3B    | 2× A100 80 GB FSDP  | `accelerate launch`   | 38,000 | ~10 B  |
+| 3B    | 2× A100 80 GB FSDP  | `scripts/train_3b_all.sh` | 38,000 | ~10 B  |
 
 WandB runs are named `{size}_{variant}`; group via `WANDB_PROJECT` (default
 `bitnet158`).
 
-## Eval (held-out C4 perplexity)
+## Eval
 
-`pretrain.py` streams the C4 validation split, runs eval every `eval_steps`,
-and logs `eval/loss`, `eval/perplexity`, and `train/num_input_tokens_seen` to
-WandB/TensorBoard. Defaults: `eval_steps: 1000`, `eval_samples: 512` (≈ 1M
-tokens — enough for a stable PPL estimate). Set `eval_samples: 0` to disable.
+**During training** — held-out SlimPajama perplexity logged to WandB every
+`eval_steps` (default 1000) over `eval_samples` sequences (default 512, ≈ 1M
+tokens). Logged keys: `eval/loss`, `eval/perplexity`,
+`train/num_input_tokens_seen`. Set `eval_samples: 0` to disable.
 
-Downstream zero-shot benchmarks (ARC, HellaSwag, WinoGrande, PIQA, BoolQ) —
-run post-hoc against a saved checkpoint with
-[lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness).
+**Post-hoc zero-shot** — [`scripts/eval.sh`](scripts/eval.sh) runs the BitNet
+paper's benchmark suite (HellaSwag, WinoGrande, ARC-e/c, PIQA, BoolQ, OBQA,
+LAMBADA) via [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness):
+
+```bash
+bash scripts/eval.sh outputs/700M_tbn158/final
+```
+
+Results land in `<ckpt>/eval_results/`.
 
 ## Configs
 
@@ -146,7 +189,7 @@ crashed at — optimizer-state shards (FSDP/ZeRO) are sized to it.
 
 ## Notes
 
-- C4 streams from HuggingFace on demand. No upfront download, but needs
+- SlimPajama streams from HuggingFace on demand. No upfront download, but needs
   internet during training.
 - Stable PyTorch (≥ 2.4) is sufficient. No nightly required.
 - Gradient checkpointing on by default; bf16 on by default.
