@@ -8,8 +8,8 @@ b1.58 linear layers. Built on HuggingFace `transformers` + `Trainer`.
   (subclasses of `nn.Linear`, STE in forward, full-precision master weights).
 - [`bitnet/model.py`](bitnet/model.py) — Llama-3 configs (200M / 700M / 3B;
   500M arch defined but no shipped config) and the linear-swap helper.
-- [`pretrain.py`](pretrain.py) — single entrypoint; HF `Trainer` on streaming
-  SlimPajama.
+- [`pretrain.py`](pretrain.py) — single entrypoint; HF `Trainer` streaming
+  FineWeb-Edu (train) + WikiText-103 (validation PPL).
 - [`configs/`](configs/) — per-(size, variant) YAML training hyperparams; auto-
   loaded by `pretrain.py` as `configs/{size}_{variant}.yaml`. CLI flags override.
 - [`scripts/train_3b_all.sh`](scripts/train_3b_all.sh) — sequential 3B sweep
