@@ -26,6 +26,10 @@ import os
 from itertools import chain
 from pathlib import Path
 
+# Pin tokenizer parallelism before any worker is forked. Avoids segfaults from
+# HF Rust tokenizer's threadpool fighting with DataLoader's multiprocessing.
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
 import yaml
 from datasets import load_dataset
 from transformers import (
@@ -249,7 +253,10 @@ def main() -> None:
         eval_steps=settings["eval_steps"],
         bf16=True,
         gradient_checkpointing=not settings["no_gradient_checkpointing"],
-        dataloader_num_workers=2,
+        # Streaming HF datasets are I/O-bound on the main thread; workers > 0
+        # gives no throughput but causes segfaults on small-/dev/shm containers
+        # (e.g. JupyterHub) and tokenizer-fork races.
+        dataloader_num_workers=0,
         report_to=["wandb", "tensorboard"],
         max_grad_norm=1.0,
         # Streaming datasets have no __len__; required so Trainer doesn't try.
