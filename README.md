@@ -63,6 +63,28 @@ sequentially via FSDP, ~10B tokens each. Crash-safe: rerun the same command
 and each variant resumes from its latest checkpoint. Stdout/stderr is tee'd
 to `logs/3B_<variant>.log`.
 
+Or run any variant individually (these are exactly what the sweep script
+issues — same flags, same log destination, same `--resume` behavior):
+
+```bash
+mkdir -p logs
+
+# plain
+accelerate launch --config_file configs/accelerate_fsdp_2gpu.yaml \
+    pretrain.py --size 3B --variant plain --resume \
+    2>&1 | tee logs/3B_plain.log
+
+# bitnet158
+accelerate launch --config_file configs/accelerate_fsdp_2gpu.yaml \
+    pretrain.py --size 3B --variant bitnet158 --resume \
+    2>&1 | tee logs/3B_bitnet158.log
+
+# tbn158
+accelerate launch --config_file configs/accelerate_fsdp_2gpu.yaml \
+    pretrain.py --size 3B --variant tbn158 --resume \
+    2>&1 | tee logs/3B_tbn158.log
+```
+
 **WandB**: open the `bitnet158` project — `train/num_input_tokens_seen`
 climbs linearly from 0 to ~10B over each run; `eval/perplexity` is logged
 every 1000 steps against the WikiText-103 validation split.
