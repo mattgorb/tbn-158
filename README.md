@@ -90,12 +90,15 @@ climbs linearly from 0 to ~10B over each run; `eval/perplexity` is logged
 every 1000 steps against the WikiText-103 validation split.
 
 Then evaluate each final checkpoint on the BitNet paper's zero-shot suite
-(HellaSwag, WinoGrande, ARC-e/c, PIQA, BoolQ, OBQA, LAMBADA):
+(HellaSwag, WinoGrande, ARC-e/c, PIQA, BoolQ, OBQA, LAMBADA).
+
+3B checkpoints are saved as FSDP sharded state — consolidate first, then eval:
 
 ```bash
-bash scripts/eval.sh outputs/3B_plain/final
-bash scripts/eval.sh outputs/3B_bitnet158/final
-bash scripts/eval.sh outputs/3B_tbn158/final
+for V in plain bitnet158 tbn158; do
+    bash scripts/consolidate_fsdp.sh outputs/3B_${V}/final
+    bash scripts/eval.sh             outputs/3B_${V}/final/consolidated
+done
 ```
 
 ### Paper-scale run (4× A100 80 GB, 100B tokens, tbn158 only)

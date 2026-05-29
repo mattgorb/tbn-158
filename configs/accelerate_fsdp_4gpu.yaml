@@ -15,7 +15,10 @@ fsdp_config:
   fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
   fsdp_transformer_layer_cls_to_wrap: LlamaDecoderLayer
   fsdp_backward_prefetch: BACKWARD_PRE
-  fsdp_state_dict_type: FULL_STATE_DICT
+  # SHARDED_STATE_DICT: each rank writes its own shard. Avoids rank-0 RAM
+  # spike during save. Final checkpoint must be consolidated for lm-eval (see
+  # scripts/consolidate_fsdp.sh).
+  fsdp_state_dict_type: SHARDED_STATE_DICT
   fsdp_use_orig_params: true
   fsdp_sync_module_states: true
   fsdp_cpu_ram_efficient_loading: true
