@@ -311,12 +311,36 @@ def main() -> None:
         **fsdp_kwargs,
     )
 
+    # HF Trainer's FSDP+XLA path calls `create_scheduler` before
+    # `create_optimizer`, leaving `self.optimizer = None` when the LR scheduler
+    # tries to read `optimizer.param_groups`. Bypass by pre-creating AdamW and
+    # passing it via `optimizers=(opt, None)` — Trainer skips its own optimizer
+    # creation and feeds this one straight into the scheduler.
+    trainer_kwargs = {}
+    if on_tpu:
+        from torch.optim import AdamW
+
+        no_decay = ("bias", "norm.weight")
+        decay_params = [p for n, p in model.named_parameters() if not any(s in n for s in no_decay)]
+        no_decay_params = [p for n, p in model.named_parameters() if any(s in n for s in no_decay)]
+        optimizer = AdamW(
+            [
+                {"params": decay_params, "weight_decay": settings["weight_decay"]},
+                {"params": no_decay_params, "weight_decay": 0.0},
+            ],
+            lr=settings["lr"],
+            betas=(0.9, 0.999),
+            eps=1e-8,
+        )
+        trainer_kwargs["optimizers"] = (optimizer, None)
+
     trainer = TrainerWithPerplexity(
         model=model,
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=eval_ds,
         data_collator=default_data_collator,
+        **trainer_kwargs,
     )
 
     resume_from = find_latest_checkpoint(output_dir) if args.resume else None
