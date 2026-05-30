@@ -244,6 +244,21 @@ def main() -> None:
 
     os.environ.setdefault("WANDB_PROJECT", args.wandb_project)
 
+    # On TPU/XLA, configure FSDP via TrainingArguments (accelerate's XLA cluster
+    # config doesn't accept fsdp keys). FSDPv2 uses XLA SPMD under the hood.
+    fsdp_kwargs = {}
+    if os.environ.get("PJRT_DEVICE") == "TPU":
+        fsdp_kwargs = {
+            "fsdp": "full_shard auto_wrap",
+            "fsdp_config": {
+                "transformer_layer_cls_to_wrap": "LlamaDecoderLayer",
+                "xla": True,
+                "xla_fsdp_v2": True,
+                "xla_fsdp_grad_ckpt": False,
+            },
+        }
+        print("Detected TPU; enabling XLA FSDPv2 sharding via TrainingArguments")
+
     training_args = TrainingArguments(
         output_dir=output_dir,
         run_name=run_name,
@@ -275,6 +290,7 @@ def main() -> None:
         ignore_data_skip=True,
         # Logs `train/num_input_tokens_seen` to WandB/TensorBoard.
         include_num_input_tokens_seen=True,
+        **fsdp_kwargs,
     )
 
     trainer = TrainerWithPerplexity(

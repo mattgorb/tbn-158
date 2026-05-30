@@ -19,8 +19,6 @@ use_cpu: false
 downcast_bf16: 'no'
 tpu_use_cluster: false
 tpu_use_sudo: false
-xla_fsdp_v2: true
-xla_fsdp_settings:
-  fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
-  fsdp_transformer_layer_cls_to_wrap: LlamaDecoderLayer
-  fsdp_sharding_strategy: FULL_SHARD
+# FSDP is configured via HF TrainingArguments in pretrain.py (auto-enabled when
+# PJRT_DEVICE=TPU). Don't put fsdp keys here — they're not in accelerate's
+# XLA cluster-config schema and will error on launch.
