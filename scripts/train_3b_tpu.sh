@@ -7,12 +7,16 @@
 #   ACCEL=configs/accelerate_tpu_v6e_32.yaml \
 #       bash scripts/train_3b_tpu.sh                   # use multi-host v6e-32 config
 #
+# GCS-backed checkpoints (survive spot preemption — recommended):
+#   GCS_BUCKET=matt-tbn158-ckpts \
+#       bash scripts/train_3b_tpu.sh                   # writes outputs/ to gs://<bucket>
+#
 # Multi-host note: this script runs `accelerate launch` on whichever host you
-# SSH'd into. For v6e-32 (4 hosts), invoke from your laptop instead so the
+# SSH'd into. For v6e-16/-32/-64, invoke from your laptop instead so the
 # command fans out to every worker:
-#   gcloud compute tpus tpu-vm ssh <tpu-name> --zone=us-east1-d --worker=all \
+#   gcloud compute tpus tpu-vm ssh <tpu-name> --zone=<zone> --worker=all \
 #       --command='cd ~/tbn-158 && ACCEL=configs/accelerate_tpu_v6e_32.yaml \
-#                    bash scripts/train_3b_tpu.sh tbn158'
+#                    GCS_BUCKET=matt-tbn158-ckpts bash scripts/train_3b_tpu.sh tbn158'
 
 set -euo pipefail
 
@@ -20,6 +24,27 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
 ACCEL="${ACCEL:-configs/accelerate_tpu_v6e_8.yaml}"
+GCS_BUCKET="${GCS_BUCKET:-}"
+
+# Mount GCS bucket if requested. Checkpoints land in the mounted dir and survive
+# VM preemption — a fresh VM remounts the same bucket and --resume picks up at
+# the latest checkpoint.
+if [ -n "${GCS_BUCKET}" ]; then
+    MOUNT_DIR="${HOME}/gcs"
+    mkdir -p "${MOUNT_DIR}"
+    if ! mountpoint -q "${MOUNT_DIR}"; then
+        echo "==> Mounting gs://${GCS_BUCKET} at ${MOUNT_DIR}"
+        # --implicit-dirs: treat object prefixes as directories
+        # --file-mode=664 --dir-mode=775: writable by user/group (needed for HF Trainer)
+        gcsfuse --implicit-dirs --file-mode=664 --dir-mode=775 \
+            "${GCS_BUCKET}" "${MOUNT_DIR}"
+    fi
+    OUTPUT_BASE="${MOUNT_DIR}/outputs"
+    echo "==> Checkpoints will persist to gs://${GCS_BUCKET}/outputs/"
+else
+    OUTPUT_BASE="outputs"
+    echo "==> Checkpoints will go to local outputs/ (LOST on preemption — set GCS_BUCKET to persist)"
+fi
 
 if [ $# -eq 0 ]; then
     VARIANTS=(plain bitnet158 tbn158)
@@ -34,10 +59,12 @@ for VARIANT in "${VARIANTS[@]}"; do
     echo "================================================================"
     echo "  TPU train: 3B / ${VARIANT}   ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
     echo "  Accelerate config: ${ACCEL}"
+    echo "  Output dir: ${OUTPUT_BASE}/3B_${VARIANT}"
     echo "================================================================"
     accelerate launch --config_file "${ACCEL}" \
         pretrain.py --size 3B --variant "${VARIANT}" \
         --config "configs/3B_${VARIANT}_tpu.yaml" \
+        --output_dir "${OUTPUT_BASE}/3B_${VARIANT}" \
         --resume \
         2>&1 | tee "logs/3B_${VARIANT}_tpu.log"
 done
@@ -45,6 +72,6 @@ done
 echo
 echo "Done. Consolidate + eval each final checkpoint:"
 for V in "${VARIANTS[@]}"; do
-    echo "  bash scripts/consolidate_fsdp.sh outputs/3B_${V}/final"
-    echo "  bash scripts/eval.sh             outputs/3B_${V}/final/consolidated"
+    echo "  bash scripts/consolidate_fsdp.sh ${OUTPUT_BASE}/3B_${V}/final"
+    echo "  bash scripts/eval.sh             ${OUTPUT_BASE}/3B_${V}/final/consolidated"
 done

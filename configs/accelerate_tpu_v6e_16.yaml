@@ -1,0 +1,23 @@
+# Accelerate config for Cloud TPU v6e-16 (2 hosts, 16 chips × 32 GB = 512 GB).
+# Sweet spot between v6e-8 (single-host, slow) and v6e-32 (4-host, scarce on spot).
+#
+# Use with:
+#   gcloud compute tpus tpu-vm ssh <name> --zone=<zone> --worker=all \
+#       --command='cd ~/tbn-158 && ACCEL=configs/accelerate_tpu_v6e_16.yaml \
+#                    bash scripts/train_3b_tpu.sh'
+#
+# FSDP is configured via HF TrainingArguments in pretrain.py (auto-enabled when
+# PJRT_DEVICE=TPU). Don't put fsdp keys here.
+compute_environment: LOCAL_MACHINE
+distributed_type: XLA
+mixed_precision: bf16
+num_machines: 2
+num_processes: 16
+machine_rank: 0  # Overridden per worker by accelerate at launch
+main_training_function: main
+rdzv_backend: static
+same_network: true
+use_cpu: false
+downcast_bf16: 'no'
+tpu_use_cluster: false
+tpu_use_sudo: false

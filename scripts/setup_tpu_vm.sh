@@ -22,6 +22,18 @@ pip install "transformers>=4.50" "accelerate>=1.0" "datasets>=3.0" \
 echo "==> Sanity-checking torch_xla can see the TPUs ..."
 python -c "import torch_xla.core.xla_model as xm; print('xla_device:', xm.xla_device()); print('world_size:', xm.xla_real_devices())"
 
+echo "==> Installing gcsfuse (for GCS-backed checkpoint persistence) ..."
+if ! command -v gcsfuse >/dev/null 2>&1; then
+    export GCSFUSE_REPO="gcsfuse-$(lsb_release -c -s)"
+    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt ${GCSFUSE_REPO} main" \
+        | sudo tee /etc/apt/sources.list.d/gcsfuse.list
+    curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+        | sudo gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+    sudo apt-get update -y
+    sudo apt-get install -y gcsfuse
+fi
+echo "    gcsfuse: $(gcsfuse --version | head -1)"
+
 cat <<'EOF'
 
 ==> Next steps:

@@ -148,11 +148,27 @@ Then consolidate + eval the same way as the GPU runs.
 `--worker=all`). v6e-32 is spot-only — if it preempts, the script's `--resume`
 flag picks up at the latest checkpoint when you relaunch.
 
-**Spot preemption**: TPU spot VMs can be reclaimed at any time. The training
-script always passes `--resume`, so just rerun the same command on a fresh
-VM. Checkpoints go to local disk by default — if you want preemption survival
-across VM recreation, push `outputs/` to GCS periodically (a `gsutil rsync`
-cron in a side terminal works).
+**Spot preemption survival via GCS** (strongly recommended for any TPU run > a
+few hours): mount a GCS bucket on the VM and write checkpoints there instead
+of local disk. When the VM is preempted, just spin up a new one and re-mount —
+`--resume` picks up at the latest checkpoint from the bucket.
+
+```bash
+# 1. ONE-TIME (from laptop) — create a bucket in or near your TPU region:
+gcloud storage buckets create gs://matt-tbn158-ckpts --location=us-east1
+# (or --location=europe-west4 if your TPU is in europe-west4-a)
+
+# 2. ON EVERY VM (gcsfuse is auto-installed by setup_tpu_vm.sh) —
+#    just set GCS_BUCKET when launching:
+GCS_BUCKET=matt-tbn158-ckpts bash scripts/train_3b_tpu.sh
+
+# 3. AFTER PREEMPTION — spin up a new VM, run setup, then:
+GCS_BUCKET=matt-tbn158-ckpts bash scripts/train_3b_tpu.sh
+# The script remounts the bucket and resume picks up where you left off.
+```
+
+If you omit `GCS_BUCKET`, checkpoints go to local disk and **die with the VM
+on preemption**. Don't omit it for long runs.
 
 ### Paper-scale run (4× A100 80 GB, 100B tokens, tbn158 only)
 
