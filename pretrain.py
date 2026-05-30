@@ -30,6 +30,17 @@ from pathlib import Path
 # HF Rust tokenizer's threadpool fighting with DataLoader's multiprocessing.
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
+# On TPU, enable XLA SPMD BEFORE any device init — required by HF Trainer's
+# xla_fsdp_v2 path. Must run before importing transformers (which can
+# implicitly touch the XLA runtime via accelerate).
+if os.environ.get("PJRT_DEVICE") == "TPU":
+    try:
+        import torch_xla.runtime as xr
+
+        xr.use_spmd()
+    except ImportError:
+        pass
+
 import yaml
 from datasets import load_dataset
 from transformers import (
