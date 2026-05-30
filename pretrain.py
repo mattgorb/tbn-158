@@ -257,17 +257,24 @@ def main() -> None:
 
     # On TPU/XLA, configure FSDP via TrainingArguments (accelerate's XLA cluster
     # config doesn't accept fsdp keys). FSDPv2 uses XLA SPMD under the hood.
+    #
+    # NOTE: with FSDP full_shard, Trainer's `gradient_checkpointing=True` is
+    # incompatible (HF issue #30404) — it leaves the optimizer uninitialized and
+    # the LR scheduler crashes on `optimizer.param_groups`. Put activation
+    # checkpointing inside `fsdp_config` instead, and force the Trainer flag off.
     fsdp_kwargs = {}
-    if os.environ.get("PJRT_DEVICE") == "TPU":
+    on_tpu = os.environ.get("PJRT_DEVICE") == "TPU"
+    if on_tpu:
         fsdp_kwargs = {
             "fsdp": "full_shard auto_wrap",
             "fsdp_config": {
                 "transformer_layer_cls_to_wrap": "LlamaDecoderLayer",
                 "xla": True,
                 "xla_fsdp_v2": True,
-                "xla_fsdp_grad_ckpt": False,
+                "activation_checkpointing": not settings["no_gradient_checkpointing"],
             },
         }
+        settings = {**settings, "no_gradient_checkpointing": True}
         print("Detected TPU; enabling XLA FSDPv2 sharding via TrainingArguments")
 
     training_args = TrainingArguments(
