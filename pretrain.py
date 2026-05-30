@@ -204,7 +204,22 @@ def build_dataset(tokenizer, seq_len: int, split: str = "train", take: int | Non
 
 
 class TrainerWithPerplexity(Trainer):
-    """Trainer that also logs `eval_perplexity = exp(eval_loss)`."""
+    """Trainer that also logs `eval_perplexity = exp(eval_loss)`.
+
+    Also patches a bug in HF Trainer's FSDP+XLA path where `_prepare_for_training`
+    calls `create_scheduler` without first calling `create_optimizer`, leaving
+    `self.optimizer = None` and crashing the scheduler on `param_groups`. We
+    defensively create the optimizer here if it doesn't exist yet.
+    """
+
+    def create_optimizer_and_scheduler(self, num_training_steps: int):
+        self.create_optimizer()
+        self.create_scheduler(num_training_steps=num_training_steps, optimizer=self.optimizer)
+
+    def create_scheduler(self, num_training_steps, optimizer=None):
+        if optimizer is None and self.optimizer is None:
+            self.create_optimizer()
+        return super().create_scheduler(num_training_steps, optimizer or self.optimizer)
 
     def evaluate(self, *args, **kwargs):
         metrics = super().evaluate(*args, **kwargs)
@@ -311,36 +326,14 @@ def main() -> None:
         **fsdp_kwargs,
     )
 
-    # HF Trainer's FSDP+XLA path calls `create_scheduler` before
-    # `create_optimizer`, leaving `self.optimizer = None` when the LR scheduler
-    # tries to read `optimizer.param_groups`. Bypass by pre-creating AdamW and
-    # passing it via `optimizers=(opt, None)` — Trainer skips its own optimizer
-    # creation and feeds this one straight into the scheduler.
-    trainer_kwargs = {}
-    if on_tpu:
-        from torch.optim import AdamW
-
-        no_decay = ("bias", "norm.weight")
-        decay_params = [p for n, p in model.named_parameters() if not any(s in n for s in no_decay)]
-        no_decay_params = [p for n, p in model.named_parameters() if any(s in n for s in no_decay)]
-        optimizer = AdamW(
-            [
-                {"params": decay_params, "weight_decay": settings["weight_decay"]},
-                {"params": no_decay_params, "weight_decay": 0.0},
-            ],
-            lr=settings["lr"],
-            betas=(0.9, 0.999),
-            eps=1e-8,
-        )
-        trainer_kwargs["optimizers"] = (optimizer, None)
-
+    # HF Trainer refuses `optimizers=` under FSDP. Optimizer creation order is
+    # patched via TrainerWithPerplexity.create_scheduler override above.
     trainer = TrainerWithPerplexity(
         model=model,
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=eval_ds,
         data_collator=default_data_collator,
-        **trainer_kwargs,
     )
 
     resume_from = find_latest_checkpoint(output_dir) if args.resume else None
