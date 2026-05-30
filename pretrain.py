@@ -286,7 +286,9 @@ def main() -> None:
                 "transformer_layer_cls_to_wrap": "LlamaDecoderLayer",
                 "xla": True,
                 "xla_fsdp_v2": True,
-                "activation_checkpointing": not settings["no_gradient_checkpointing"],
+                # XLA-specific key — `activation_checkpointing` is the non-XLA
+                # name and silently no-ops here, causing HBM OOM.
+                "xla_fsdp_grad_ckpt": not settings["no_gradient_checkpointing"],
             },
         }
         settings = {**settings, "no_gradient_checkpointing": True}
