@@ -1,0 +1,24 @@
+# 3B / plain — TPU v6e training, 10B token target.
+# Default sizing for v6e-8 (8 chips): global batch = 4 × 8 × 4 = 128 seqs × 2048
+# = 262K tokens/step → 38000 steps ≈ 10B tokens.
+#
+# On v6e-32, lower gradient_accumulation_steps to 1 (4× more chips → same
+# global batch in 1 accum step instead of 4) and steps stays at 38000.
+#
+# Launch (single-host v6e-8):
+#   accelerate launch --config_file configs/accelerate_tpu_v6e_8.yaml \
+#       pretrain.py --size 3B --variant plain --config configs/3B_plain_tpu.yaml --resume
+per_device_batch_size: 4
+gradient_accumulation_steps: 4
+seq_len: 2048
+lr: 3.0e-4
+steps: 38000
+warmup_steps: 1000
+weight_decay: 0.1
+save_steps: 500
+save_total_limit: 4
+logging_steps: 10
+eval_steps: 500
+# bf16 is handled by accelerate's mixed_precision on XLA. Trainer's bf16 flag
+# (which assumes CUDA AMP) must be off — otherwise it tries torch.cuda.* APIs.
+bf16: false

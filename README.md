@@ -101,6 +101,59 @@ for V in plain bitnet158 tbn158; do
 done
 ```
 
+### Run on Cloud TPU (v6e-8, single host)
+
+If you have TPU credits (e.g. TRC) and no GPUs handy, the 3B sweep also runs
+on a single-host **v6e-8** (8 chips × 32 GB = 256 GB HBM). Wall-clock per
+10B-token run: ~22 hours on v6e-8 spot.
+
+**One-time on your laptop** — install gcloud CLI and provision the VM:
+
+```bash
+# 1. Install gcloud CLI (macOS):
+brew install --cask google-cloud-sdk
+
+# 2. Auth + set project (your project is tbn158, number 759280869534):
+gcloud auth login
+gcloud config set project tbn158
+
+# 3. Provision a v6e-8 spot VM in us-east1-d:
+gcloud compute tpus tpu-vm create matt-tbn158 \
+    --zone=us-east1-d \
+    --accelerator-type=v6e-8 \
+    --version=v2-alpha-tpuv6e \
+    --spot
+
+# 4. SSH in:
+gcloud compute tpus tpu-vm ssh matt-tbn158 --zone=us-east1-d
+```
+
+**On the TPU VM** — clone, install, train:
+
+```bash
+git clone https://github.com/<you>/tbn-158.git && cd tbn-158
+bash scripts/setup_tpu_vm.sh                  # installs torch_xla + deps
+huggingface-cli login
+wandb login
+
+bash scripts/train_3b_tpu.sh                  # all 3 variants, ~3 days serial
+bash scripts/train_3b_tpu.sh tbn158           # or one variant at a time
+```
+
+Then consolidate + eval the same way as the GPU runs.
+
+**For faster runs (v6e-32, 4 hosts, ~6 hours per variant)**: provision with
+`--accelerator-type=v6e-32`, and launch with the multi-host fan-out command in
+[`scripts/train_3b_tpu.sh`](scripts/train_3b_tpu.sh)'s header (uses
+`--worker=all`). v6e-32 is spot-only — if it preempts, the script's `--resume`
+flag picks up at the latest checkpoint when you relaunch.
+
+**Spot preemption**: TPU spot VMs can be reclaimed at any time. The training
+script always passes `--resume`, so just rerun the same command on a fresh
+VM. Checkpoints go to local disk by default — if you want preemption survival
+across VM recreation, push `outputs/` to GCS periodically (a `gsutil rsync`
+cron in a side terminal works).
+
 ### Paper-scale run (4× A100 80 GB, 100B tokens, tbn158 only)
 
 If you have 4 GPUs and want to match the BitNet paper's training-token budget:

@@ -1,0 +1,29 @@
+# Accelerate config for Cloud TPU v6e-32 (4 hosts, 32 chips × 32 GB HBM = 1 TB).
+# Multi-host — must launch the script on every host in parallel (see
+# scripts/train_3b_tpu.sh for the gcloud --worker=all invocation).
+#
+# ~4× faster than v6e-8 (10B tokens on 3B ≈ ~6 hours vs ~22 hours).
+#
+# Use with:
+#   gcloud compute tpus tpu-vm ssh <name> --zone=us-east1-d --worker=all \
+#       --command='cd ~/tbn-158 && accelerate launch \
+#           --config_file configs/accelerate_tpu_v6e_32.yaml \
+#           pretrain.py --size 3B --variant tbn158 ...'
+compute_environment: LOCAL_MACHINE
+distributed_type: XLA
+mixed_precision: bf16
+num_machines: 4
+num_processes: 32
+machine_rank: 0  # Overridden per worker by accelerate at launch
+main_training_function: main
+rdzv_backend: static
+same_network: true
+use_cpu: false
+downcast_bf16: 'no'
+tpu_use_cluster: false
+tpu_use_sudo: false
+xla_fsdp_v2: true
+xla_fsdp_settings:
+  fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
+  fsdp_transformer_layer_cls_to_wrap: LlamaDecoderLayer
+  fsdp_sharding_strategy: FULL_SHARD

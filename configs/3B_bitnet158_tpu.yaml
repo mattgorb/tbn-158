@@ -1,0 +1,14 @@
+# 3B / bitnet158 — TPU v6e training, 10B token target.
+# Same launcher / sizing as 3B_plain_tpu.yaml. See that file's header for details.
+per_device_batch_size: 4
+gradient_accumulation_steps: 4
+seq_len: 2048
+lr: 3.0e-4
+steps: 38000
+warmup_steps: 1000
+weight_decay: 0.1
+save_steps: 500
+save_total_limit: 4
+logging_steps: 10
+eval_steps: 500
+bf16: false

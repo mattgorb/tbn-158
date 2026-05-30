@@ -58,6 +58,9 @@ BUILTIN_DEFAULTS = {
     # C4 validation perplexity. Set eval_samples: 0 to disable.
     "eval_steps": 1000,
     "eval_samples": 512,
+    # bf16 via torch.cuda.amp. Set to false on TPU/XLA — accelerate handles
+    # mixed precision via `mixed_precision: bf16` in the accelerate config.
+    "bf16": True,
 }
 
 # Fields that may appear in YAML configs and as CLI overrides.
@@ -116,6 +119,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         default=argparse.SUPPRESS,
         help="Disable gradient checkpointing (faster, more memory).",
+    )
+    p.add_argument(
+        "--bf16",
+        type=lambda s: s.lower() in ("true", "1", "yes"),
+        default=argparse.SUPPRESS,
+        help="bf16 via CUDA AMP. Set to false on TPU/XLA (accelerate handles it).",
     )
     return p.parse_args()
 
@@ -251,12 +260,15 @@ def main() -> None:
         save_total_limit=settings["save_total_limit"],
         eval_strategy="steps" if eval_ds is not None else "no",
         eval_steps=settings["eval_steps"],
-        bf16=True,
+        bf16=settings["bf16"],
         gradient_checkpointing=not settings["no_gradient_checkpointing"],
         # Streaming HF datasets are I/O-bound on the main thread; workers > 0
         # gives no throughput but causes segfaults on small-/dev/shm containers
         # (e.g. JupyterHub) and tokenizer-fork races.
         dataloader_num_workers=0,
+        # XLA requires static shapes — partial last batch triggers infinite
+        # recompilation. Harmless on CUDA too.
+        dataloader_drop_last=True,
         report_to=["wandb", "tensorboard"],
         max_grad_norm=1.0,
         # Streaming datasets have no __len__; required so Trainer doesn't try.
