@@ -310,6 +310,15 @@ def main() -> None:
         save_total_limit=settings["save_total_limit"],
         eval_strategy="steps" if eval_ds is not None else "no",
         eval_steps=settings["eval_steps"],
+        # HF Trainer's `_save_optimizer_and_scheduler` deadlocks under
+        # xla_fsdp_v2: it gates the save on `if should_save` (rank-0 only),
+        # but `xm.save` inside that branch needs a cross-rank gather of the
+        # sharded optimizer tensors. Ranks 1-N skip the branch, never join the
+        # gather, rank 0 hangs forever. Workaround: skip optimizer-state save
+        # entirely on TPU. Model weights + global_step still persist; LR
+        # scheduler reconstructs to current step on resume; only Adam moments
+        # reset (couple hundred steps of suboptimality after each resume).
+        save_only_model=on_tpu,
         bf16=settings["bf16"],
         gradient_checkpointing=not settings["no_gradient_checkpointing"],
         # Streaming HF datasets are I/O-bound on the main thread; workers > 0

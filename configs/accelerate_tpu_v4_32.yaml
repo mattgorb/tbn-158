@@ -1,0 +1,24 @@
+# Accelerate config for Cloud TPU v4-32 (8 hosts × 4 chips = 32 chips × 32 GB HBM = 1 TB).
+# On-demand only — no preemption. Recommended when spot v6e is unstable.
+#
+# v4 has 4 chips per host (vs v6e's 8), so v4-32 is 8 hosts. The setup
+# command must fan out to all 8 workers — see scripts/train_3b_tpu.sh
+# for the gcloud --worker=all pattern.
+#
+# Use with:
+#   gcloud compute tpus tpu-vm ssh <name> --zone=us-central2-b --worker=all \
+#       --command='cd ~/tbn-158 && ACCEL=configs/accelerate_tpu_v4_32.yaml \
+#                    GCS_BUCKET=matt-tbn158-ckpts bash scripts/train_3b_tpu.sh'
+compute_environment: LOCAL_MACHINE
+distributed_type: XLA
+mixed_precision: bf16
+num_machines: 8
+num_processes: 32
+machine_rank: 0  # Overridden per worker by accelerate at launch
+main_training_function: main
+rdzv_backend: static
+same_network: true
+use_cpu: false
+downcast_bf16: 'no'
+tpu_use_cluster: false
+tpu_use_sudo: false

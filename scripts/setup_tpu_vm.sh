@@ -19,8 +19,9 @@ pip install "transformers>=4.50" "accelerate>=1.0" "datasets>=3.0" \
     "tokenizers>=0.15" "huggingface_hub>=0.25" \
     wandb tensorboard einops safetensors pyyaml "lm-eval>=0.4"
 
-echo "==> Sanity-checking torch_xla can see the TPUs ..."
-python -c "import torch_xla.core.xla_model as xm; print('xla_device:', xm.xla_device()); print('world_size:', xm.xla_real_devices())"
+echo "==> Verifying torch_xla import (skipping device init — it deadlocks on"
+echo "    multi-host slices until both workers are running) ..."
+python -c "import torch_xla; print('torch_xla:', torch_xla.__version__)"
 
 echo "==> Installing gcsfuse (for GCS-backed checkpoint persistence) ..."
 if ! command -v gcsfuse >/dev/null 2>&1; then

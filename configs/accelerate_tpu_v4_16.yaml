@@ -1,0 +1,19 @@
+# Accelerate config for Cloud TPU v4-16 (4 hosts × 4 chips = 16 chips × 32 GB = 512 GB HBM).
+#
+# Use with:
+#   gcloud compute tpus tpu-vm ssh <name> --zone=us-central2-b --worker=all \
+#       --command='cd ~/tbn-158 && ACCEL=configs/accelerate_tpu_v4_16.yaml \
+#                    GCS_BUCKET=matt-tbn158-ckpts bash scripts/train_3b_tpu.sh tbn158'
+compute_environment: LOCAL_MACHINE
+distributed_type: XLA
+mixed_precision: bf16
+num_machines: 4
+num_processes: 16
+machine_rank: 0
+main_training_function: main
+rdzv_backend: static
+same_network: true
+use_cpu: false
+downcast_bf16: 'no'
+tpu_use_cluster: false
+tpu_use_sudo: false
