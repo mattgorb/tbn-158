@@ -66,9 +66,11 @@ training_is_running() {
     local zone="$1"
     local count
     log "Checking if training process exists on worker 0..."
-    # 30s timeout — quick check. If SSH key propagation is slow, fall through
-    # to the relaunch path (which is a safe no-op if training was actually up).
-    count=$(timeout 30 gcloud compute tpus tpu-vm ssh "$TPU_NAME" --zone="$zone" --worker=0 \
+    # Force pure key auth — no password fallback, no interactive prompts ever.
+    count=$(timeout 180 gcloud compute tpus tpu-vm ssh "$TPU_NAME" --zone="$zone" --worker=0 \
+        --ssh-flag='-o PasswordAuthentication=no' \
+        --ssh-flag='-o BatchMode=yes' \
+        --ssh-flag='-o ConnectTimeout=30' \
         --command='pgrep -fc pretrain.py || echo 0' 2>/dev/null | tr -d '[:space:]')
     log "training_is_running probe returned: '${count:-<empty>}'"
     [ "${count:-0}" -gt 0 ]
@@ -116,7 +118,11 @@ provision_and_launch_all_workers() {
     local zone="$1"
     log "Provisioning + launching across all workers of $TPU_NAME (zone=$zone)..."
     # 20 min cap. Echo markers below let you see which phase is running.
+    # Force pure key auth — no password fallback, no interactive prompts.
     timeout 1200 gcloud compute tpus tpu-vm ssh "$TPU_NAME" --zone="$zone" --worker=all \
+        --ssh-flag='-o PasswordAuthentication=no' \
+        --ssh-flag='-o BatchMode=yes' \
+        --ssh-flag='-o ConnectTimeout=60' \
         --command="
             set -e
             echo '[provision] === START ==='
