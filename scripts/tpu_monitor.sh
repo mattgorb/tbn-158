@@ -44,7 +44,8 @@ if ! ssh-keygen -y -P "" -f "$HOME/.ssh/google_compute_engine" >/dev/null 2>&1; 
 fi
 
 # ============ HELPERS ============
-log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $*" | tee -a "$LOG_FILE"; }
+# Log to stderr (so functions can `echo` return values to stdout for capture).
+log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $*" | tee -a "$LOG_FILE" >&2; }
 
 # Search every configured zone for the TPU. Echoes "STATE ZONE" if found, or
 # "NOT_FOUND ''" if absent everywhere.
@@ -78,7 +79,7 @@ create_tpu_in_any_zone() {
         log "Attempting create in zone $z..."
         if gcloud compute tpus tpu-vm create "$TPU_NAME" --zone="$z" \
             --accelerator-type="$ACCEL_TYPE" --version="$VERSION" \
-            --network="$NETWORK" $spot_flag 2>&1 | tee -a "$LOG_FILE"; then
+            --network="$NETWORK" $spot_flag 2>&1 | tee -a "$LOG_FILE" >&2; then
             log "Successfully created $TPU_NAME in $z"
             echo "$z"
             return 0
