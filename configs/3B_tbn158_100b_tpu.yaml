@@ -1,0 +1,38 @@
+# 3B / tbn158 — paper-grade 100B-token target on TPU v6e-32.
+# Matches the BitNet b1.58 paper's training-token budget (arXiv:2402.17764).
+#
+# Sized for v6e-32 (4 hosts × 8 chips = 32 chips):
+#   global batch = 4 × 32 × 8 = 1024 seqs × 2048 = 2.1M tokens/step
+#   50000 steps × 2.1M ≈ 105B tokens
+#
+# Expected wall-clock: ~3-4 days on v6e-32. Use the spot retry loop or the
+# monitor script — over multi-day runs preemption is a question of when, not if.
+#
+# Launch (multi-host, from laptop):
+#   gcloud compute tpus tpu-vm ssh <name> --zone=<zone> --worker=all --command='
+#     cd ~/tbn-158
+#     mkdir -p ~/gcs
+#     mountpoint -q ~/gcs || gcsfuse --implicit-dirs --file-mode=664 --dir-mode=775 matt-tbn158-ckpts ~/gcs
+#     tmux kill-session -t train 2>/dev/null || true
+#     tmux new -d -s train "accelerate launch --config_file configs/accelerate_tpu_v6e_32.yaml \
+#         pretrain.py --size 3B --variant tbn158 \
+#         --config configs/3B_tbn158_100b_tpu.yaml \
+#         --output_dir \$HOME/gcs/outputs/3B_tbn158_100b \
+#         --run_name 3B_tbn158_100b --resume 2>&1 | tee /tmp/train_100b.log"
+#   '
+#
+# For v6e-8 instead, you'd need steps=200000 (same tokens/step is 4× smaller).
+# Wall-clock on v6e-8 would be ~32 days — beyond TRC's 30-day window. Use v6e-32.
+per_device_batch_size: 4
+gradient_accumulation_steps: 8
+seq_len: 2048
+lr: 3.0e-4
+steps: 50000
+warmup_steps: 2000
+weight_decay: 0.1
+save_steps: 1000
+save_total_limit: 4
+logging_steps: 10
+eval_steps: 1000
+eval_samples: 1024
+bf16: false

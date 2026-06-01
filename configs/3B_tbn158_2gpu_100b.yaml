@@ -1,0 +1,28 @@
+# 3B / tbn158 — paper-grade 100B-token target on 2× A100 80 GB (FSDP).
+# Matches the BitNet b1.58 paper's training-token budget (arXiv:2402.17764).
+#
+# Global batch = 2 × 2gpu × 64accum = 256 seqs × 2048 = 524K tokens/step.
+# 200000 steps × 524K ≈ 105B tokens.
+#
+# Wall-clock: ~28 days on 2× A100 80 GB (right at the edge of TRC's 30-day
+# window). If you have access to more GPUs use configs/3B_tbn158_4gpu_100b.yaml
+# instead (4× faster).
+#
+# Launcher (multi-host accelerate is unnecessary — 2 GPUs on 1 box):
+#   accelerate launch --config_file configs/accelerate_fsdp_2gpu.yaml \
+#       pretrain.py --size 3B --variant tbn158 \
+#       --config configs/3B_tbn158_2gpu_100b.yaml \
+#       --output_dir outputs/3B_tbn158_100b \
+#       --run_name 3B_tbn158_100b --resume
+per_device_batch_size: 2
+gradient_accumulation_steps: 64
+seq_len: 2048
+lr: 3.0e-4
+steps: 200000
+warmup_steps: 2000
+weight_decay: 0.1
+save_steps: 1000
+save_total_limit: 4
+logging_steps: 50
+eval_steps: 1000
+eval_samples: 1024

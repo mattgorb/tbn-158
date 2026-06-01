@@ -25,6 +25,10 @@ cd "${REPO_ROOT}"
 
 ACCEL="${ACCEL:-configs/accelerate_tpu_v6e_8.yaml}"
 GCS_BUCKET="${GCS_BUCKET:-}"
+# Optional suffix appended to output dir + WandB run name, e.g. RUN_SUFFIX=_runA
+# → output_dir=outputs/3B_tbn158_runA, run_name=3B_tbn158_runA. Lets you run
+# multiple parallel variants without colliding.
+RUN_SUFFIX="${RUN_SUFFIX:-}"
 
 # Mount GCS bucket if requested. Checkpoints land in the mounted dir and survive
 # VM preemption — a fresh VM remounts the same bucket and --resume picks up at
@@ -59,19 +63,20 @@ for VARIANT in "${VARIANTS[@]}"; do
     echo "================================================================"
     echo "  TPU train: 3B / ${VARIANT}   ($(date -u +%Y-%m-%dT%H:%M:%SZ))"
     echo "  Accelerate config: ${ACCEL}"
-    echo "  Output dir: ${OUTPUT_BASE}/3B_${VARIANT}"
+    echo "  Output dir: ${OUTPUT_BASE}/3B_${VARIANT}${RUN_SUFFIX}"
     echo "================================================================"
     accelerate launch --config_file "${ACCEL}" \
         pretrain.py --size 3B --variant "${VARIANT}" \
         --config "configs/3B_${VARIANT}_tpu.yaml" \
-        --output_dir "${OUTPUT_BASE}/3B_${VARIANT}" \
+        --output_dir "${OUTPUT_BASE}/3B_${VARIANT}${RUN_SUFFIX}" \
+        --run_name "3B_${VARIANT}${RUN_SUFFIX}" \
         --resume \
-        2>&1 | tee "logs/3B_${VARIANT}_tpu.log"
+        2>&1 | tee "logs/3B_${VARIANT}${RUN_SUFFIX}_tpu.log"
 done
 
 echo
 echo "Done. Consolidate + eval each final checkpoint:"
 for V in "${VARIANTS[@]}"; do
-    echo "  bash scripts/consolidate_fsdp.sh ${OUTPUT_BASE}/3B_${V}/final"
-    echo "  bash scripts/eval.sh             ${OUTPUT_BASE}/3B_${V}/final/consolidated"
+    echo "  bash scripts/consolidate_fsdp.sh ${OUTPUT_BASE}/3B_${V}${RUN_SUFFIX}/final"
+    echo "  bash scripts/eval.sh             ${OUTPUT_BASE}/3B_${V}${RUN_SUFFIX}/final/consolidated"
 done

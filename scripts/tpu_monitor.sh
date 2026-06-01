@@ -26,6 +26,15 @@ WANDB_TOKEN="${WANDB_TOKEN:?WANDB_TOKEN env var required}"
 
 LOG_FILE="${LOG_FILE:-/tmp/tpu_monitor.log}"
 
+# ============ SSH KEY (cron-safe) ============
+# gcloud needs an SSH key for the TPU VM. Without one, it interactively prompts
+# for a passphrase, which deadlocks any non-interactive caller (cron, scripts).
+# Generate an empty-passphrase key the first time we run.
+if [ ! -f "$HOME/.ssh/google_compute_engine" ]; then
+    mkdir -p "$HOME/.ssh"
+    ssh-keygen -t rsa -f "$HOME/.ssh/google_compute_engine" -N "" -q
+fi
+
 # ============ HELPERS ============
 log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $*" | tee -a "$LOG_FILE"; }
 
