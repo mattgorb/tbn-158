@@ -65,9 +65,10 @@ for VARIANT in "${VARIANTS[@]}"; do
     echo "  Accelerate config: ${ACCEL}"
     echo "  Output dir: ${OUTPUT_BASE}/3B_${VARIANT}${RUN_SUFFIX}"
     echo "================================================================"
+    CFG="${CONFIG_FILE:-configs/3B_${VARIANT}_tpu.yaml}"
     accelerate launch --config_file "${ACCEL}" \
         pretrain.py --size 3B --variant "${VARIANT}" \
-        --config "configs/3B_${VARIANT}_tpu.yaml" \
+        --config "${CFG}" \
         --output_dir "${OUTPUT_BASE}/3B_${VARIANT}${RUN_SUFFIX}" \
         --run_name "3B_${VARIANT}${RUN_SUFFIX}" \
         --resume \

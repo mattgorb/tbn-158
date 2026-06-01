@@ -20,6 +20,9 @@ GCS_BUCKET="${GCS_BUCKET:-matt-tbn158-ckpts}"
 VARIANT="${VARIANT:-bitnet158}"
 USE_SPOT="${USE_SPOT:-true}"
 ACCEL_CONFIG="${ACCEL_CONFIG:-configs/accelerate_tpu_v6e_32.yaml}"
+# Passed through to train_3b_tpu.sh — used by the launch tmux command below.
+RUN_SUFFIX="${RUN_SUFFIX:-}"
+CONFIG_FILE="${CONFIG_FILE:-}"
 
 HF_TOKEN="${HF_TOKEN:?HF_TOKEN env var required}"
 WANDB_TOKEN="${WANDB_TOKEN:?WANDB_TOKEN env var required}"
@@ -93,7 +96,7 @@ provision_and_launch_all_workers() {
             sudo apt-get install -y tmux 2>/dev/null || true
             cd \$HOME/tbn-158 && git pull
             tmux kill-session -t train 2>/dev/null || true
-            tmux new -d -s train \"ACCEL=$ACCEL_CONFIG GCS_BUCKET=$GCS_BUCKET bash scripts/train_3b_tpu.sh $VARIANT 2>&1 | tee /tmp/train.log\"
+            tmux new -d -s train \"ACCEL=$ACCEL_CONFIG GCS_BUCKET=$GCS_BUCKET RUN_SUFFIX=$RUN_SUFFIX CONFIG_FILE=$CONFIG_FILE bash scripts/train_3b_tpu.sh $VARIANT 2>&1 | tee /tmp/train.log\"
         " 2>&1 | tee -a "$LOG_FILE"
 }
 
