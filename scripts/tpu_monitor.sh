@@ -68,6 +68,7 @@ training_is_running() {
     log "Checking if training process exists on worker 0..."
     # Force pure key auth — no password fallback, no interactive prompts ever.
     count=$(timeout 180 gcloud compute tpus tpu-vm ssh "$TPU_NAME" --zone="$zone" --worker=0 \
+        --tunnel-through-iap \
         --ssh-flag='-o PasswordAuthentication=no' \
         --ssh-flag='-o BatchMode=yes' \
         --ssh-flag='-o ConnectTimeout=30' \
@@ -120,6 +121,7 @@ provision_and_launch_all_workers() {
     # 20 min cap. Echo markers below let you see which phase is running.
     # Force pure key auth — no password fallback, no interactive prompts.
     timeout 1200 gcloud compute tpus tpu-vm ssh "$TPU_NAME" --zone="$zone" --worker=all \
+        --tunnel-through-iap \
         --ssh-flag='-o PasswordAuthentication=no' \
         --ssh-flag='-o BatchMode=yes' \
         --ssh-flag='-o ConnectTimeout=60' \
