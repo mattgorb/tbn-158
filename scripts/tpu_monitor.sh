@@ -65,7 +65,10 @@ find_tpu() {
 training_is_running() {
     local zone="$1"
     local count
-    count=$(gcloud compute tpus tpu-vm ssh "$TPU_NAME" --zone="$zone" --worker=0 \
+    # 90s timeout — first SSH to a brand-new TPU sometimes hangs propagating keys.
+    # If we can't get an answer, treat training as not running (caller will
+    # relaunch, which is a safe no-op if it actually was running).
+    count=$(timeout 90 gcloud compute tpus tpu-vm ssh "$TPU_NAME" --zone="$zone" --worker=0 \
         --command='pgrep -fc pretrain.py || echo 0' 2>/dev/null | tr -d '[:space:]')
     [ "${count:-0}" -gt 0 ]
 }
@@ -110,7 +113,8 @@ wait_for_ready() {
 provision_and_launch_all_workers() {
     local zone="$1"
     log "Provisioning + launching across all workers of $TPU_NAME (zone=$zone)..."
-    gcloud compute tpus tpu-vm ssh "$TPU_NAME" --zone="$zone" --worker=all \
+    # 30 min cap on the setup SSH — installs can take 5-15 min on a fresh VM.
+    timeout 1800 gcloud compute tpus tpu-vm ssh "$TPU_NAME" --zone="$zone" --worker=all \
         --command="
             set -e
             if [ ! -d \$HOME/tbn-158 ]; then
