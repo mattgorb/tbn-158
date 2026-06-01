@@ -65,11 +65,12 @@ find_tpu() {
 training_is_running() {
     local zone="$1"
     local count
-    # 90s timeout — first SSH to a brand-new TPU sometimes hangs propagating keys.
-    # If we can't get an answer, treat training as not running (caller will
-    # relaunch, which is a safe no-op if it actually was running).
-    count=$(timeout 90 gcloud compute tpus tpu-vm ssh "$TPU_NAME" --zone="$zone" --worker=0 \
+    log "Checking if training process exists on worker 0..."
+    # 30s timeout — quick check. If SSH key propagation is slow, fall through
+    # to the relaunch path (which is a safe no-op if training was actually up).
+    count=$(timeout 30 gcloud compute tpus tpu-vm ssh "$TPU_NAME" --zone="$zone" --worker=0 \
         --command='pgrep -fc pretrain.py || echo 0' 2>/dev/null | tr -d '[:space:]')
+    log "training_is_running probe returned: '${count:-<empty>}'"
     [ "${count:-0}" -gt 0 ]
 }
 
@@ -95,41 +96,52 @@ create_tpu_in_any_zone() {
 
 wait_for_ready() {
     local zone="$1"
-    log "Waiting for TPU to become READY in $zone..."
+    log "Waiting for TPU to become READY in $zone (polling every 15s, max 15 min)..."
     for i in $(seq 1 60); do
         local s
         s=$(gcloud compute tpus tpu-vm describe "$TPU_NAME" --zone="$zone" \
             --format='value(state)' 2>/dev/null || echo "")
         if [ "$s" = "READY" ]; then
-            log "TPU is READY in $zone."
+            log "TPU is READY in $zone (after $((i * 15))s)."
             return 0
         fi
-        sleep 30
+        log "  poll #$i: state=$s, sleeping 15s..."
+        sleep 15
     done
-    log "TPU did not become READY within 30 min. Aborting this cycle."
+    log "TPU did not become READY within 15 min. Aborting this cycle."
     return 1
 }
 
 provision_and_launch_all_workers() {
     local zone="$1"
     log "Provisioning + launching across all workers of $TPU_NAME (zone=$zone)..."
-    # 30 min cap on the setup SSH — installs can take 5-15 min on a fresh VM.
-    timeout 1800 gcloud compute tpus tpu-vm ssh "$TPU_NAME" --zone="$zone" --worker=all \
+    # 20 min cap. Echo markers below let you see which phase is running.
+    timeout 1200 gcloud compute tpus tpu-vm ssh "$TPU_NAME" --zone="$zone" --worker=all \
         --command="
             set -e
+            echo '[provision] === START ==='
             if [ ! -d \$HOME/tbn-158 ]; then
+                echo '[provision] cloning repo...'
                 git clone $REPO_URL \$HOME/tbn-158
                 cd \$HOME/tbn-158
+                echo '[provision] running setup_tpu_vm.sh (pip installs, ~5-10 min)...'
                 bash scripts/setup_tpu_vm.sh
                 echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> \$HOME/.bashrc
+                echo '[provision] installing tmux...'
                 sudo apt install -y tmux
+            else
+                echo '[provision] repo already cloned, skipping setup'
             fi
             export PATH=\"\$HOME/.local/bin:\$PATH\"
+            echo '[provision] hf + wandb auth...'
             hf auth login --token $HF_TOKEN 2>/dev/null || huggingface-cli login --token $HF_TOKEN 2>/dev/null || true
             wandb login $WANDB_TOKEN 2>/dev/null || true
+            echo '[provision] git pull latest...'
             cd \$HOME/tbn-158 && git pull
             tmux kill-session -t train 2>/dev/null || true
+            echo '[provision] launching tmux session train...'
             tmux new -d -s train \"ACCEL=$ACCEL_CONFIG GCS_BUCKET=$GCS_BUCKET RUN_SUFFIX=$RUN_SUFFIX CONFIG_FILE=$CONFIG_FILE bash scripts/train_3b_tpu.sh $VARIANT 2>&1 | tee /tmp/train.log\"
+            echo '[provision] === DONE ==='
         " 2>&1 | tee -a "$LOG_FILE"
 }
 
