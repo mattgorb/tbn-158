@@ -268,7 +268,11 @@ def manual_load_checkpoint_weights(model, ckpt_dir: str) -> int:
         state_dict = load_file(model_file)
     else:
         import torch
-        state_dict = torch.load(model_file, map_location="cpu")
+        # weights_only=False forces the legacy pickle loader. torch 2.6+
+        # defaults to weights_only=True (secure unpickler), which can hang for
+        # extremely long times on big pytorch_model.bin checkpoints under
+        # gcsfuse — sometimes never finishing in practice.
+        state_dict = torch.load(model_file, map_location="cpu", weights_only=False)
     missing, unexpected = model.load_state_dict(state_dict, strict=False)
     if missing:
         print(f"  WARNING: {len(missing)} keys missing from checkpoint, e.g. {missing[:3]}")
