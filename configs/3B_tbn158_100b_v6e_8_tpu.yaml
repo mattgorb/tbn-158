@@ -1,0 +1,29 @@
+# 3B / tbn158 — paper-scale ~100B-token target on TPU v6e-8 (single host).
+# Same per-step economics as 3B_tbn158_100b_tpu.yaml, but 4× more steps because
+# v6e-8 has 1/4 the chips of v6e-32.
+#
+# Global batch = 4 × 8 chips × 8 accum = 256 seqs × 2048 = 524K tokens/step.
+# 200000 steps × 524K ≈ 105B tokens.
+#
+# Wall-clock at ~14s/step on v6e-8: ~32 days. That EXCEEDS the 30-day TRC
+# window. Use this config knowing the run will probably get cut off around
+# step 180K–190K (~95-100B tokens) when TRC ends. Still solid for the paper.
+# If you have v6e-32 capacity available, use 3B_tbn158_100b_tpu.yaml instead
+# (50K steps, ~3-4 days wall-clock).
+#
+# Launcher:
+#   Set CONFIG_FILE=configs/3B_tbn158_100b_v6e_8_tpu.yaml in the tpu_monitor
+#   cron entry, with ACCEL_TYPE=v6e-8, ACCEL_CONFIG=configs/accelerate_tpu_v6e_8.yaml.
+per_device_batch_size: 4
+gradient_accumulation_steps: 8
+seq_len: 2048
+lr: 3.0e-4
+steps: 200000
+warmup_steps: 2000
+weight_decay: 0.1
+save_steps: 1000
+save_total_limit: 4
+logging_steps: 50
+eval_steps: 1000
+eval_samples: 1024
+bf16: false

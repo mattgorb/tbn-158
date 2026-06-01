@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
-# Cron-friendly TPU watchdog. Runs periodically (e.g. every 30 min), ensures
-# the TPU exists and training is alive. If the TPU is preempted, recreates it,
-# runs setup on every worker, and launches training in detached tmux sessions
-# on every worker (which resume from GCS via --resume).
+# Cron-friendly TPU watchdog. Runs periodically (e.g. every 15 min), ensures
+# the TPU exists and training is alive. If the TPU is preempted, recreates it
+# (trying multiple zones in order), runs setup on every worker, and launches
+# training in detached tmux on every worker (resumes from GCS via --resume).
 #
-# Handles BOTH single-host (v6e-8, v4-8...) and multi-host (v6e-16/32/64,
-# v4-16/32) slices — `--worker=all` is used everywhere.
+# Multi-zone aware: ZONES is a comma-separated list. The script searches every
+# zone for the TPU, and on (re)create tries them in order until one accepts.
 
 set -uo pipefail
 
 # ============ CONFIG ============
-TPU_NAME="${TPU_NAME:-matt-tbn158}"
-ZONE="${ZONE:-us-east1-d}"
+TPU_NAME="${TPU_NAME:-matt-tbn158-2}"
+# Comma-separated zones, tried in priority order. The script searches all of
+# them every tick to find where the TPU actually lives.
+ZONES="${ZONES:-us-east1-d,europe-west4-a}"
 ACCEL_TYPE="${ACCEL_TYPE:-v6e-8}"
 VERSION="${VERSION:-v2-alpha-tpuv6e}"
 NETWORK="${NETWORK:-tbn158-net}"
@@ -20,7 +22,6 @@ GCS_BUCKET="${GCS_BUCKET:-matt-tbn158-ckpts}"
 VARIANT="${VARIANT:-tbn158}"
 USE_SPOT="${USE_SPOT:-true}"
 ACCEL_CONFIG="${ACCEL_CONFIG:-configs/accelerate_tpu_v6e_8.yaml}"
-# Passed through to train_3b_tpu.sh — used by the launch tmux command below.
 RUN_SUFFIX="${RUN_SUFFIX:-}"
 CONFIG_FILE="${CONFIG_FILE:-}"
 
@@ -29,56 +30,74 @@ WANDB_TOKEN="${WANDB_TOKEN:?WANDB_TOKEN env var required}"
 
 LOG_FILE="${LOG_FILE:-/tmp/tpu_monitor.log}"
 
+IFS=',' read -ra ZONE_LIST <<< "$ZONES"
+
 # ============ SSH KEY (cron-safe) ============
-# gcloud needs an SSH key for the TPU VM. Without one — or with a passphrased
-# one — it interactively prompts, deadlocking any non-interactive caller (cron,
-# scripts). Force an empty-passphrase key here. If an existing key has a
-# passphrase, you'll see an unusable-key error from ssh-keygen — in that case
-# remove the old key first: `rm -f ~/.ssh/google_compute_engine{,.pub}`
 mkdir -p "$HOME/.ssh"
 if [ ! -f "$HOME/.ssh/google_compute_engine" ]; then
     ssh-keygen -t rsa -f "$HOME/.ssh/google_compute_engine" -N "" -q
 fi
-# Quick sanity check — try to use it noninteractively, fail loud if it's locked:
 if ! ssh-keygen -y -P "" -f "$HOME/.ssh/google_compute_engine" >/dev/null 2>&1; then
-    echo "ERROR: ~/.ssh/google_compute_engine has a passphrase. Either run:" >&2
-    echo "  ssh-keygen -p -f ~/.ssh/google_compute_engine -P 'OLD' -N ''" >&2
-    echo "or delete it: rm -f ~/.ssh/google_compute_engine{,.pub}" >&2
+    echo "ERROR: ~/.ssh/google_compute_engine has a passphrase. Delete and retry:" >&2
+    echo "  rm -f ~/.ssh/google_compute_engine{,.pub} && ssh-keygen -t rsa -f ~/.ssh/google_compute_engine -N '' -q" >&2
     exit 1
 fi
 
 # ============ HELPERS ============
 log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $*" | tee -a "$LOG_FILE"; }
 
-get_state() {
-    gcloud compute tpus tpu-vm describe "$TPU_NAME" --zone="$ZONE" \
-        --format='value(state)' 2>/dev/null || echo "NOT_FOUND"
+# Search every configured zone for the TPU. Echoes "STATE ZONE" if found, or
+# "NOT_FOUND ''" if absent everywhere.
+find_tpu() {
+    for z in "${ZONE_LIST[@]}"; do
+        local s
+        s=$(gcloud compute tpus tpu-vm describe "$TPU_NAME" --zone="$z" \
+            --format='value(state)' 2>/dev/null)
+        if [ -n "$s" ]; then
+            echo "$s $z"
+            return
+        fi
+    done
+    echo "NOT_FOUND "
 }
 
-# Returns 0 if training is running on worker 0 (proxy for the whole slice).
 training_is_running() {
+    local zone="$1"
     local count
-    count=$(gcloud compute tpus tpu-vm ssh "$TPU_NAME" --zone="$ZONE" --worker=0 \
+    count=$(gcloud compute tpus tpu-vm ssh "$TPU_NAME" --zone="$zone" --worker=0 \
         --command='pgrep -fc pretrain.py || echo 0' 2>/dev/null | tr -d '[:space:]')
     [ "${count:-0}" -gt 0 ]
 }
 
-create_tpu() {
+# Try every configured zone in order. Echoes the successful zone, returns 0.
+# If all zones fail, returns 1 and echoes empty.
+create_tpu_in_any_zone() {
     local spot_flag=""
     [ "$USE_SPOT" = "true" ] && spot_flag="--spot"
-    log "Creating TPU $TPU_NAME ($ACCEL_TYPE, zone=$ZONE, spot=$USE_SPOT)..."
-    gcloud compute tpus tpu-vm create "$TPU_NAME" --zone="$ZONE" \
-        --accelerator-type="$ACCEL_TYPE" --version="$VERSION" \
-        --network="$NETWORK" $spot_flag 2>&1 | tee -a "$LOG_FILE"
+    for z in "${ZONE_LIST[@]}"; do
+        log "Attempting create in zone $z..."
+        if gcloud compute tpus tpu-vm create "$TPU_NAME" --zone="$z" \
+            --accelerator-type="$ACCEL_TYPE" --version="$VERSION" \
+            --network="$NETWORK" $spot_flag 2>&1 | tee -a "$LOG_FILE"; then
+            log "Successfully created $TPU_NAME in $z"
+            echo "$z"
+            return 0
+        fi
+        log "Create failed in $z, trying next zone..."
+    done
+    log "All zones exhausted. Will retry next tick."
+    return 1
 }
 
 wait_for_ready() {
-    log "Waiting for TPU to become READY..."
+    local zone="$1"
+    log "Waiting for TPU to become READY in $zone..."
     for i in $(seq 1 60); do
         local s
-        s=$(get_state)
+        s=$(gcloud compute tpus tpu-vm describe "$TPU_NAME" --zone="$zone" \
+            --format='value(state)' 2>/dev/null || echo "")
         if [ "$s" = "READY" ]; then
-            log "TPU is READY."
+            log "TPU is READY in $zone."
             return 0
         fi
         sleep 30
@@ -87,11 +106,10 @@ wait_for_ready() {
     return 1
 }
 
-# Runs on every worker: clone if missing, install if missing, auth, then
-# (re)launch training in a detached tmux session. Idempotent.
 provision_and_launch_all_workers() {
-    log "Provisioning + launching across all workers of $TPU_NAME..."
-    gcloud compute tpus tpu-vm ssh "$TPU_NAME" --zone="$ZONE" --worker=all \
+    local zone="$1"
+    log "Provisioning + launching across all workers of $TPU_NAME (zone=$zone)..."
+    gcloud compute tpus tpu-vm ssh "$TPU_NAME" --zone="$zone" --worker=all \
         --command="
             set -e
             if [ ! -d \$HOME/tbn-158 ]; then
@@ -111,33 +129,37 @@ provision_and_launch_all_workers() {
 }
 
 # ============ MAIN ============
-log "--- tick ---"
-state=$(get_state)
-log "TPU state: $state"
+log "--- tick ($TPU_NAME zones=$ZONES) ---"
+read -r state found_zone < <(find_tpu)
+log "TPU state: $state${found_zone:+ (zone=$found_zone)}"
 
 case "$state" in
     READY)
-        if training_is_running; then
-            log "Training is running on worker 0. Nothing to do."
+        if training_is_running "$found_zone"; then
+            log "Training is running on worker 0 in $found_zone. Nothing to do."
         else
-            log "TPU up but no training process found. Relaunching..."
-            provision_and_launch_all_workers
+            log "TPU up in $found_zone but no training process. Relaunching..."
+            provision_and_launch_all_workers "$found_zone"
         fi
         ;;
-    PREEMPTED|STOPPED|TERMINATED|NOT_FOUND)
-        log "TPU is $state. Cleaning up + recreating..."
-        gcloud compute tpus tpu-vm delete "$TPU_NAME" --zone="$ZONE" --quiet 2>/dev/null || true
-        if create_tpu; then
-            wait_for_ready && provision_and_launch_all_workers
-        else
-            log "Create failed (probably capacity). Will retry next tick."
+    PREEMPTED|STOPPED|TERMINATED)
+        log "TPU is $state in $found_zone. Deleting + recreating across zones..."
+        gcloud compute tpus tpu-vm delete "$TPU_NAME" --zone="$found_zone" --quiet 2>/dev/null || true
+        if new_zone=$(create_tpu_in_any_zone); then
+            wait_for_ready "$new_zone" && provision_and_launch_all_workers "$new_zone"
+        fi
+        ;;
+    NOT_FOUND)
+        log "TPU not found in any zone. Creating..."
+        if new_zone=$(create_tpu_in_any_zone); then
+            wait_for_ready "$new_zone" && provision_and_launch_all_workers "$new_zone"
         fi
         ;;
     CREATING|REPAIRING)
-        log "TPU is $state — provisioning in progress. Skipping this tick."
+        log "TPU is $state in $found_zone — provisioning in progress. Skipping this tick."
         ;;
     *)
-        log "Unknown state '$state'. Skipping."
+        log "Unknown state '$state' in $found_zone. Skipping."
         ;;
 esac
 log "--- end tick ---"
