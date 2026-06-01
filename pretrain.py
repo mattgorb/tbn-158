@@ -203,6 +203,55 @@ def build_dataset(tokenizer, seq_len: int, split: str = "train", take: int | Non
     return packed.take(take) if take else packed
 
 
+def manual_load_checkpoint_weights(model, ckpt_dir: str) -> int:
+    """Load checkpoint weights into the model BEFORE FSDP wraps it.
+
+    Reason: HF Trainer's `_load_from_checkpoint` deadlocks on XLA FSDPv2 SPMD
+    because the post-wrap model-load requires an all-ranks broadcast collective
+    that only rank 0 actually enters. Pre-loading on the CPU-side model
+    (which all 8 XLA workers do) sidesteps the issue — FSDP then shards the
+    already-loaded weights normally on first forward.
+
+    Returns the global_step from the checkpoint, or 0 if loading was skipped.
+    """
+    import json
+
+    # Find the model weights file:
+    model_file = None
+    for candidate in ("model.safetensors", "pytorch_model.bin"):
+        p = os.path.join(ckpt_dir, candidate)
+        if os.path.exists(p):
+            model_file = p
+            break
+    if not model_file:
+        print(f"  no model file found in {ckpt_dir}, starting fresh")
+        return 0
+
+    print(f"  loading weights from {model_file}...")
+    if model_file.endswith(".safetensors"):
+        from safetensors.torch import load_file
+        state_dict = load_file(model_file)
+    else:
+        import torch
+        state_dict = torch.load(model_file, map_location="cpu")
+    missing, unexpected = model.load_state_dict(state_dict, strict=False)
+    if missing:
+        print(f"  WARNING: {len(missing)} keys missing from checkpoint, e.g. {missing[:3]}")
+    if unexpected:
+        print(f"  WARNING: {len(unexpected)} unexpected keys, e.g. {unexpected[:3]}")
+    del state_dict
+
+    # Read global_step:
+    state_file = os.path.join(ckpt_dir, "trainer_state.json")
+    if os.path.exists(state_file):
+        with open(state_file) as f:
+            ts = json.load(f)
+        gs = ts.get("global_step", 0)
+        print(f"  resumed at global_step={gs}")
+        return gs
+    return 0
+
+
 class TrainerWithPerplexity(Trainer):
     """Trainer that also logs `eval_perplexity = exp(eval_loss)`.
 
@@ -210,7 +259,18 @@ class TrainerWithPerplexity(Trainer):
     calls `create_scheduler` without first calling `create_optimizer`, leaving
     `self.optimizer = None` and crashing the scheduler on `param_groups`. We
     defensively create the optimizer here if it doesn't exist yet.
+
+    And: overrides `_load_from_checkpoint` to no-op the model load, because
+    we pre-load weights in main() before FSDP wraps the model (HF's load path
+    deadlocks under XLA FSDPv2 SPMD).
     """
+
+    def _load_from_checkpoint(self, resume_from_checkpoint, model=None):
+        # Model weights are already loaded by manual_load_checkpoint_weights()
+        # in main(). HF Trainer's load would deadlock under XLA FSDPv2 — skip it.
+        # Trainer state (global_step, epoch) is still restored from
+        # trainer_state.json by the rest of HF Trainer's resume flow.
+        return
 
     def create_optimizer_and_scheduler(self, num_training_steps: int):
         self.create_optimizer()
@@ -252,6 +312,14 @@ def main() -> None:
     print("Settings:")
     for k in sorted(settings):
         print(f"  {k}: {settings[k]}")
+
+    # Manual checkpoint pre-load (XLA FSDPv2 workaround — see docstring on
+    # manual_load_checkpoint_weights). Must happen BEFORE Trainer is created
+    # so the load goes into the CPU model, before FSDP wraps it.
+    resume_from = find_latest_checkpoint(output_dir) if args.resume else None
+    if resume_from:
+        print(f"Pre-loading checkpoint weights from {resume_from}")
+        manual_load_checkpoint_weights(model, resume_from)
 
     print(f"Loading tokenizer: {args.tokenizer}")
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
