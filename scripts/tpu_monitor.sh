@@ -10,16 +10,16 @@
 set -uo pipefail
 
 # ============ CONFIG ============
-TPU_NAME="${TPU_NAME:-matt-tbn158-v6e32}"
-ZONE="${ZONE:-europe-west4-a}"
-ACCEL_TYPE="${ACCEL_TYPE:-v6e-32}"
+TPU_NAME="${TPU_NAME:-matt-tbn158}"
+ZONE="${ZONE:-us-east1-d}"
+ACCEL_TYPE="${ACCEL_TYPE:-v6e-8}"
 VERSION="${VERSION:-v2-alpha-tpuv6e}"
 NETWORK="${NETWORK:-tbn158-net}"
 REPO_URL="${REPO_URL:?REPO_URL env var required, e.g. https://<pat>@github.com/<you>/tbn-158.git}"
 GCS_BUCKET="${GCS_BUCKET:-matt-tbn158-ckpts}"
-VARIANT="${VARIANT:-bitnet158}"
+VARIANT="${VARIANT:-tbn158}"
 USE_SPOT="${USE_SPOT:-true}"
-ACCEL_CONFIG="${ACCEL_CONFIG:-configs/accelerate_tpu_v6e_32.yaml}"
+ACCEL_CONFIG="${ACCEL_CONFIG:-configs/accelerate_tpu_v6e_8.yaml}"
 # Passed through to train_3b_tpu.sh — used by the launch tmux command below.
 RUN_SUFFIX="${RUN_SUFFIX:-}"
 CONFIG_FILE="${CONFIG_FILE:-}"
@@ -30,12 +30,21 @@ WANDB_TOKEN="${WANDB_TOKEN:?WANDB_TOKEN env var required}"
 LOG_FILE="${LOG_FILE:-/tmp/tpu_monitor.log}"
 
 # ============ SSH KEY (cron-safe) ============
-# gcloud needs an SSH key for the TPU VM. Without one, it interactively prompts
-# for a passphrase, which deadlocks any non-interactive caller (cron, scripts).
-# Generate an empty-passphrase key the first time we run.
+# gcloud needs an SSH key for the TPU VM. Without one — or with a passphrased
+# one — it interactively prompts, deadlocking any non-interactive caller (cron,
+# scripts). Force an empty-passphrase key here. If an existing key has a
+# passphrase, you'll see an unusable-key error from ssh-keygen — in that case
+# remove the old key first: `rm -f ~/.ssh/google_compute_engine{,.pub}`
+mkdir -p "$HOME/.ssh"
 if [ ! -f "$HOME/.ssh/google_compute_engine" ]; then
-    mkdir -p "$HOME/.ssh"
     ssh-keygen -t rsa -f "$HOME/.ssh/google_compute_engine" -N "" -q
+fi
+# Quick sanity check — try to use it noninteractively, fail loud if it's locked:
+if ! ssh-keygen -y -P "" -f "$HOME/.ssh/google_compute_engine" >/dev/null 2>&1; then
+    echo "ERROR: ~/.ssh/google_compute_engine has a passphrase. Either run:" >&2
+    echo "  ssh-keygen -p -f ~/.ssh/google_compute_engine -P 'OLD' -N ''" >&2
+    echo "or delete it: rm -f ~/.ssh/google_compute_engine{,.pub}" >&2
+    exit 1
 fi
 
 # ============ HELPERS ============
@@ -87,13 +96,14 @@ provision_and_launch_all_workers() {
             set -e
             if [ ! -d \$HOME/tbn-158 ]; then
                 git clone $REPO_URL \$HOME/tbn-158
-                bash \$HOME/tbn-158/scripts/setup_tpu_vm.sh
+                cd \$HOME/tbn-158
+                bash scripts/setup_tpu_vm.sh
+                echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> \$HOME/.bashrc
+                sudo apt install -y tmux
             fi
-            grep -q '.local/bin' \$HOME/.bashrc || echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> \$HOME/.bashrc
             export PATH=\"\$HOME/.local/bin:\$PATH\"
-            huggingface-cli login --token $HF_TOKEN 2>/dev/null || true
+            hf auth login --token $HF_TOKEN 2>/dev/null || huggingface-cli login --token $HF_TOKEN 2>/dev/null || true
             wandb login $WANDB_TOKEN 2>/dev/null || true
-            sudo apt-get install -y tmux 2>/dev/null || true
             cd \$HOME/tbn-158 && git pull
             tmux kill-session -t train 2>/dev/null || true
             tmux new -d -s train \"ACCEL=$ACCEL_CONFIG GCS_BUCKET=$GCS_BUCKET RUN_SUFFIX=$RUN_SUFFIX CONFIG_FILE=$CONFIG_FILE bash scripts/train_3b_tpu.sh $VARIANT 2>&1 | tee /tmp/train.log\"
