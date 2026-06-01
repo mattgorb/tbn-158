@@ -203,6 +203,41 @@ def build_dataset(tokenizer, seq_len: int, split: str = "train", take: int | Non
     return packed.take(take) if take else packed
 
 
+def repair_trainer_state_json(ckpt_dir: str) -> None:
+    """Salvage a trainer_state.json that has "Extra data" corruption.
+
+    Cause: when a previous save was interrupted mid-write (preemption /
+    deadlock kill), gcsfuse can leave a partial write that the next save
+    appends to instead of overwriting. The file ends up with two back-to-back
+    JSON objects — only the first is the real state.
+
+    Fix: parse with raw_decode to extract the first complete object, write it
+    back. If the file is already valid, this is a no-op.
+    """
+    import json
+    state_file = os.path.join(ckpt_dir, "trainer_state.json")
+    if not os.path.exists(state_file):
+        return
+    try:
+        with open(state_file) as f:
+            content = f.read()
+        try:
+            json.loads(content)  # already valid
+            return
+        except json.JSONDecodeError:
+            pass
+        obj, idx = json.JSONDecoder().raw_decode(content)
+        if idx < len(content):
+            print(
+                f"  trainer_state.json corruption detected — salvaging "
+                f"first {idx}/{len(content)} chars (global_step={obj.get('global_step', '?')})"
+            )
+            with open(state_file, "w") as f:
+                json.dump(obj, f, indent=2)
+    except Exception as e:
+        print(f"  WARNING: could not repair {state_file}: {e}")
+
+
 def manual_load_checkpoint_weights(model, ckpt_dir: str) -> int:
     """Load checkpoint weights into the model BEFORE FSDP wraps it.
 
@@ -318,6 +353,11 @@ def main() -> None:
     # so the load goes into the CPU model, before FSDP wraps it.
     resume_from = find_latest_checkpoint(output_dir) if args.resume else None
     if resume_from:
+        # Repair a possibly-corrupt trainer_state.json BEFORE HF Trainer reads
+        # it inside `trainer.train(resume_from_checkpoint=...)`. Append-corrupt
+        # JSON from interrupted-save crashes Trainer's resume otherwise.
+        print(f"Checking trainer_state.json integrity at {resume_from}")
+        repair_trainer_state_json(resume_from)
         print(f"Pre-loading checkpoint weights from {resume_from}")
         manual_load_checkpoint_weights(model, resume_from)
 
