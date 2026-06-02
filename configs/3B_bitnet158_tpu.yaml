@@ -3,9 +3,13 @@
 per_device_batch_size: 2
 gradient_accumulation_steps: 8
 seq_len: 2048
-lr: 3.0e-4
+# Lowered from 3e-4 because bitnet158 (pure ternary weights, no tile averaging)
+# is more sensitive than plain or tbn158. The previous run diverged with eval
+# perplexity climbing from 5540 → 140K. 1.5e-4 matches the BitNet b1.58 paper's
+# scale for similar-size models.
+lr: 1.5e-4
 steps: 38000
-warmup_steps: 1000
+warmup_steps: 2000
 weight_decay: 0.1
 save_steps: 500
 save_total_limit: 4

@@ -311,6 +311,101 @@ class TrainerWithPerplexity(Trainer):
         # trainer_state.json by the rest of HF Trainer's resume flow.
         return
 
+    def _maybe_log_save_evaluate(self, tr_loss, *args, **kwargs):
+        """Hook the normal save flow to ALSO save optimizer + scheduler state.
+
+        HF Trainer's `_save_optimizer_and_scheduler` gates the optimizer save
+        on rank 0 only, but the `xm.save` inside requires a cross-rank gather
+        collective — deadlock. By calling `xm.save` from ALL ranks here
+        (after the normal model save), the gather completes properly and
+        rank 0 writes the file.
+
+        We keep `save_only_model=True` so HF Trainer's broken save path
+        doesn't fire — this method is the one that adds back the optimizer
+        and scheduler files.
+        """
+        # Detect a save event BEFORE the parent call, because parent may
+        # advance state. Same logic HF uses internally.
+        will_save = (
+            self.control.should_save
+            and self.state.global_step > 0
+            and self.args.save_steps
+        )
+        saved_step = self.state.global_step
+
+        result = super()._maybe_log_save_evaluate(tr_loss, *args, **kwargs)
+
+        if will_save and self.optimizer is not None:
+            ckpt_dir = os.path.join(self.args.output_dir, f"checkpoint-{saved_step}")
+            if os.path.exists(ckpt_dir):
+                try:
+                    import torch_xla.core.xla_model as xm
+
+                    # ALL ranks call xm.save — gather collective completes,
+                    # only rank 0 writes (default xm.save behavior).
+                    opt_path = os.path.join(ckpt_dir, "optimizer.pt")
+                    xm.save(self.optimizer.state_dict(), opt_path)
+                    if self.lr_scheduler is not None:
+                        sched_path = os.path.join(ckpt_dir, "scheduler.pt")
+                        xm.save(self.lr_scheduler.state_dict(), sched_path)
+                    if xm.is_master_ordinal():
+                        print(f"  saved optimizer + scheduler state to {ckpt_dir}")
+                except Exception as e:
+                    print(f"  WARNING: optimizer/scheduler save failed: {e}")
+                    print(f"  (training continues; Adam will reset on next resume)")
+
+        return result
+
+    def _load_optimizer_and_scheduler(self, checkpoint):
+        """Load optimizer + scheduler state if saved by our custom save.
+
+        With `save_only_model=True`, HF Trainer's default load is a no-op
+        (no optimizer.pt found). But our `_maybe_log_save_evaluate` override
+        DID save those files. Try to load them.
+
+        If load fails for any reason (sharding mismatch under FSDPv2 SPMD,
+        missing files, etc.), fall back to fast-forwarding just the LR
+        scheduler — Adam moments reset, but at least warmup doesn't replay.
+        """
+        super()._load_optimizer_and_scheduler(checkpoint)
+
+        if not checkpoint:
+            return
+
+        # Try to load optimizer state from our custom save:
+        opt_path = os.path.join(checkpoint, "optimizer.pt")
+        opt_loaded = False
+        if os.path.exists(opt_path) and self.optimizer is not None:
+            try:
+                import torch
+                opt_state = torch.load(opt_path, map_location="cpu", weights_only=False)
+                self.optimizer.load_state_dict(opt_state)
+                print(f"  loaded optimizer state from {opt_path}")
+                opt_loaded = True
+            except Exception as e:
+                print(f"  WARNING: optimizer load failed: {e}")
+                print(f"  Adam will reset; continuing with fresh moments")
+
+        # Try to load scheduler state:
+        sched_path = os.path.join(checkpoint, "scheduler.pt")
+        sched_loaded = False
+        if os.path.exists(sched_path) and self.lr_scheduler is not None:
+            try:
+                import torch
+                sched_state = torch.load(sched_path, map_location="cpu", weights_only=False)
+                self.lr_scheduler.load_state_dict(sched_state)
+                print(f"  loaded scheduler state from {sched_path}")
+                sched_loaded = True
+            except Exception as e:
+                print(f"  WARNING: scheduler load failed: {e}")
+
+        # Fallback: if scheduler didn't load from file, fast-forward by
+        # global_step (avoids warmup replay).
+        if not sched_loaded and self.lr_scheduler is not None and self.state.global_step > 0:
+            print(f"  fast-forwarding LR scheduler by {self.state.global_step} steps")
+            for _ in range(self.state.global_step):
+                self.lr_scheduler.step()
+
     def create_optimizer_and_scheduler(self, num_training_steps: int):
         self.create_optimizer()
         self.create_scheduler(num_training_steps=num_training_steps, optimizer=self.optimizer)
