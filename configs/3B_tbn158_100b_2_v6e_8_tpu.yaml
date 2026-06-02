@@ -1,0 +1,23 @@
+# 3B / tbn158 — paper-scale ~100B-token target on TPU v6e-8 (single host),
+# LOWER LR variant for cross-comparison with 3B_tbn158_100b_v6e_8_tpu.yaml.
+#
+# Same as 3B_tbn158_100b_v6e_8_tpu.yaml except `lr: 1.5e-4` instead of 3e-4.
+# This LR matches the BitNet b1.58 paper's scale for similar-size models and
+# gives a safer/more-conservative training trajectory. Pair with the 3e-4 run
+# for an LR-sensitivity comparison.
+#
+# Global batch = 4 × 8 chips × 8 accum = 256 seqs × 2048 = 524K tokens/step.
+# 200000 steps × 524K ≈ 105B tokens. Wall-clock ~32 days on v6e-8.
+per_device_batch_size: 4
+gradient_accumulation_steps: 8
+seq_len: 2048
+lr: 1.5e-4
+steps: 200000
+warmup_steps: 2000
+weight_decay: 0.1
+save_steps: 1000
+save_total_limit: 4
+logging_steps: 50
+eval_steps: 1000
+eval_samples: 1024
+bf16: false
