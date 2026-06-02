@@ -328,6 +328,35 @@ class TrainerWithPerplexity(Trainer):
             self.log({"eval_perplexity": ppl})
         return metrics
 
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        """Recompute loss in fp32 for accurate train_loss reporting.
+
+        Under bf16 mixed precision (accelerate config), the model's built-in
+        cross_entropy returns bf16, which quantizes to ~0.04 increments around
+        train_loss ≈ 5 — making the chart look frozen at 5.12 even though
+        underlying variations exist. Casting logits to fp32 before
+        cross_entropy gives full-precision loss with negligible compute cost
+        (just the final softmax+nll, not the rest of the forward pass).
+        """
+        import torch
+        import torch.nn.functional as F
+
+        labels = inputs.get("labels")
+        outputs = model(**inputs)
+        if labels is not None and hasattr(outputs, "logits"):
+            # Causal-LM shift: predict next token from previous positions.
+            logits = outputs.logits.float()
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous().to(shift_logits.device)
+            loss = F.cross_entropy(
+                shift_logits.view(-1, shift_logits.size(-1)),
+                shift_labels.view(-1),
+                ignore_index=-100,
+            )
+        else:
+            loss = outputs.loss
+        return (loss, outputs) if return_outputs else loss
+
 
 def find_latest_checkpoint(output_dir: str) -> str | None:
     ckpts = sorted(
