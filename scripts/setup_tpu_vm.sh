@@ -11,13 +11,13 @@ set -euo pipefail
 
 echo "==> Installing PyTorch + torch_xla (TPU build) ..."
 pip install --upgrade pip
+# torch_xla[tpu] needs the libtpu index URL — install it explicitly here.
+# torch version must match torch_xla; both pinned to 2.6.x.
 pip install "torch~=2.6.0" "torch_xla[tpu]~=2.6.0" \
     -f https://storage.googleapis.com/libtpu-releases/index.html
 
-echo "==> Installing project dependencies ..."
-pip install "transformers>=4.50" "accelerate>=1.0" "datasets>=3.0" \
-    "tokenizers>=0.15" "huggingface_hub>=0.25" \
-    wandb tensorboard einops safetensors pyyaml "lm-eval>=0.4"
+echo "==> Installing project dependencies from requirements.txt ..."
+pip install -r requirements.txt
 
 echo "==> Verifying torch_xla import (skipping device init — it deadlocks on"
 echo "    multi-host slices until both workers are running) ..."

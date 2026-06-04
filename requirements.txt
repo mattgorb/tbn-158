@@ -3,7 +3,8 @@
 # (no nightly required) — e.g.:
 #   pip install torch --index-url https://download.pytorch.org/whl/cu124
 
-torch >= 2.6, < 3
+torch ~= 2.6.0
+# torch_xla is installed by scripts/setup_tpu_vm.sh (needs libtpu index URL)
 transformers >= 4.45, < 4.50
 accelerate >= 1.0
 datasets >= 3.0

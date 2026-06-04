@@ -146,8 +146,8 @@ provision_and_launch_all_workers() {
             wandb login $WANDB_TOKEN 2>/dev/null || true
             echo '[provision] git pull latest...'
             cd \$HOME/tbn-158 && git pull
-            echo '[provision] pip install -r requirements.txt --upgrade...'
-            pip install --user --upgrade -r requirements.txt
+            echo '[provision] pip install -r requirements.txt...'
+            pip install --user -r requirements.txt
             tmux kill-session -t train 2>/dev/null || true
             echo '[provision] launching tmux session train...'
             tmux new -d -s train \"ACCEL=$ACCEL_CONFIG GCS_BUCKET=$GCS_BUCKET RUN_SUFFIX=$RUN_SUFFIX CONFIG_FILE=$CONFIG_FILE bash scripts/train_3b_tpu.sh $VARIANT 2>&1 | tee /tmp/train.log\"
