@@ -273,6 +273,21 @@ def manual_load_checkpoint_weights(model, ckpt_dir: str) -> int:
         # extremely long times on big pytorch_model.bin checkpoints under
         # gcsfuse — sometimes never finishing in practice.
         state_dict = torch.load(model_file, map_location="cpu", weights_only=False)
+
+    # Strip `_orig_module.` prefix(es) from keys — FSDP/torch.compile wrappers
+    # add these when saving. Without this, load_state_dict(strict=False) silently
+    # drops every key and leaves the model randomly initialized.
+    renamed = {}
+    n_stripped = 0
+    for k, v in state_dict.items():
+        new_k = k.replace("_orig_module.", "")
+        if new_k != k:
+            n_stripped += 1
+        renamed[new_k] = v
+    if n_stripped > 0:
+        print(f"  stripped '_orig_module.' from {n_stripped} keys")
+    state_dict = renamed
+
     missing, unexpected = model.load_state_dict(state_dict, strict=False)
     if missing:
         print(f"  WARNING: {len(missing)} keys missing from checkpoint, e.g. {missing[:3]}")
