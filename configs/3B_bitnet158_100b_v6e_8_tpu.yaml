@@ -1,0 +1,23 @@
+# 3B / bitnet158 — paper-scale ~100B-token target on TPU v6e-8 (single host).
+# Companion to 3B_tbn158_100b_v6e_8_tpu.yaml and 3B_tbn158_100b_2_v6e_8_tpu.yaml.
+# Provides the bitnet158 vs tbn158 comparison at scale.
+#
+# lr=1.5e-4 matches the BitNet b1.58 paper's scale and the 10B bitnet158 run
+# (3B_bitnet158_tpu.yaml). Pure-ternary bitnet158 is more sensitive than
+# tile-averaged tbn158 — 3e-4 diverged at 10B scale, so we use 1.5e-4 here too.
+#
+# Global batch = 4 × 8 chips × 8 accum = 256 seqs × 2048 = 524K tokens/step.
+# 200000 steps × 524K ≈ 105B tokens. Wall-clock ~32 days on v6e-8.
+per_device_batch_size: 4
+gradient_accumulation_steps: 8
+seq_len: 2048
+lr: 1.5e-4
+steps: 200000
+warmup_steps: 2000
+weight_decay: 0.1
+save_steps: 1000
+save_total_limit: 4
+logging_steps: 50
+eval_steps: 1000
+eval_samples: 1024
+bf16: false
