@@ -204,34 +204,56 @@ def build_dataset(tokenizer, seq_len: int, split: str = "train", take: int | Non
 
 
 def repair_trainer_state_json(ckpt_dir: str) -> None:
-    """Salvage a trainer_state.json that has "Extra data" corruption.
+    """Salvage a trainer_state.json that has "Extra data" corruption AND/OR
+    fields unknown to the currently-installed TrainerState dataclass.
 
-    Cause: when a previous save was interrupted mid-write (preemption /
-    deadlock kill), gcsfuse can leave a partial write that the next save
-    appends to instead of overwriting. The file ends up with two back-to-back
-    JSON objects — only the first is the real state.
+    Two failure modes handled:
 
-    Fix: parse with raw_decode to extract the first complete object, write it
-    back. If the file is already valid, this is a no-op.
+    1) JSON corruption: when a previous save was interrupted mid-write
+       (preemption / deadlock kill), gcsfuse can leave a partial write that
+       the next save appends to instead of overwriting. File ends up with two
+       back-to-back JSON objects — only the first is the real state.
+
+    2) Forward-incompat fields: a checkpoint saved by a NEWER transformers
+       version may include fields (e.g. `best_global_step`) that the
+       currently-pinned TrainerState dataclass rejects in __init__, causing
+       TypeError on load. Strip them.
     """
     import json
+    import dataclasses
+    from transformers.trainer_callback import TrainerState
+
     state_file = os.path.join(ckpt_dir, "trainer_state.json")
     if not os.path.exists(state_file):
         return
     try:
         with open(state_file) as f:
             content = f.read()
+        # Parse, handling possible "Extra data" via raw_decode.
         try:
-            json.loads(content)  # already valid
-            return
+            obj = json.loads(content)
+            had_corruption = False
         except json.JSONDecodeError:
-            pass
-        obj, idx = json.JSONDecoder().raw_decode(content)
-        if idx < len(content):
-            print(
-                f"  trainer_state.json corruption detected — salvaging "
-                f"first {idx}/{len(content)} chars (global_step={obj.get('global_step', '?')})"
-            )
+            obj, idx = json.JSONDecoder().raw_decode(content)
+            had_corruption = idx < len(content)
+            if had_corruption:
+                print(
+                    f"  trainer_state.json corruption detected — salvaging "
+                    f"first {idx}/{len(content)} chars (global_step={obj.get('global_step', '?')})"
+                )
+
+        # Drop fields unknown to the current TrainerState dataclass.
+        try:
+            valid_fields = {f.name for f in dataclasses.fields(TrainerState)}
+            unknown = set(obj.keys()) - valid_fields
+        except TypeError:
+            unknown = set()
+        if unknown:
+            print(f"  stripping unknown TrainerState fields: {sorted(unknown)}")
+            for k in unknown:
+                obj.pop(k, None)
+
+        if had_corruption or unknown:
             with open(state_file, "w") as f:
                 json.dump(obj, f, indent=2)
     except Exception as e:
