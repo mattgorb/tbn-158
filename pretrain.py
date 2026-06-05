@@ -369,6 +369,13 @@ class TrainerWithPerplexity(Trainer):
             and self.args.save_steps
         )
         saved_step = self.state.global_step
+        if will_save:
+            try:
+                import torch_xla.core.xla_model as xm
+                if xm.is_master_ordinal():
+                    print(f"  [opt-save] will_save=True at step {saved_step}, optimizer={'yes' if self.optimizer else 'NONE'}")
+            except Exception:
+                pass
 
         result = super()._maybe_log_save_evaluate(tr_loss, *args, **kwargs)
 
