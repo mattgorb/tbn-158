@@ -66,7 +66,10 @@ for VARIANT in "${VARIANTS[@]}"; do
     echo "  Output dir: ${OUTPUT_BASE}/3B_${VARIANT}${RUN_SUFFIX}"
     echo "================================================================"
     CFG="${CONFIG_FILE:-configs/3B_${VARIANT}_tpu.yaml}"
-    accelerate launch --config_file "${ACCEL}" \
+    # PYTHONUNBUFFERED=1 forces Python's stdout/stderr to be line-buffered even
+    # when piped through tee. Without this, `print()` output sits in an 8 KB
+    # buffer and looks like a hang when in fact training is progressing.
+    PYTHONUNBUFFERED=1 accelerate launch --config_file "${ACCEL}" \
         pretrain.py --size 3B --variant "${VARIANT}" \
         --config "${CFG}" \
         --output_dir "${OUTPUT_BASE}/3B_${VARIANT}${RUN_SUFFIX}" \
