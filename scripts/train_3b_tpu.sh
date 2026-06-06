@@ -66,6 +66,21 @@ for VARIANT in "${VARIANTS[@]}"; do
     echo "  Output dir: ${OUTPUT_BASE}/3B_${VARIANT}${RUN_SUFFIX}"
     echo "================================================================"
     CFG="${CONFIG_FILE:-configs/3B_${VARIANT}_tpu.yaml}"
+
+    # Pre-cache the latest checkpoint's model file so the 8 accelerate workers'
+    # torch.load calls hit the kernel page cache instead of doing 8-way
+    # contended gcsfuse reads. One sequential reader pulls at full
+    # ~100-300 MB/s; 8 contending readers get ~5 MB/s each and look hung for
+    # 30+ minutes. This single cat warms the cache in ~2 min, after which the
+    # actual training load completes in seconds.
+    OUT_DIR="${OUTPUT_BASE}/3B_${VARIANT}${RUN_SUFFIX}"
+    LATEST_CKPT=$(ls -d "${OUT_DIR}"/checkpoint-* 2>/dev/null | sort -V | tail -1)
+    if [ -n "${LATEST_CKPT}" ] && [ -f "${LATEST_CKPT}/pytorch_model.bin" ]; then
+        echo "==> Pre-caching ${LATEST_CKPT}/pytorch_model.bin (single-stream cat)"
+        time cat "${LATEST_CKPT}/pytorch_model.bin" > /dev/null
+        echo "    cache warmed."
+    fi
+
     # PYTHONUNBUFFERED=1 forces Python's stdout/stderr to be line-buffered even
     # when piped through tee. Without this, `print()` output sits in an 8 KB
     # buffer and looks like a hang when in fact training is progressing.
