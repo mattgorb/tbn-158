@@ -381,22 +381,26 @@ class TrainerWithPerplexity(Trainer):
 
         if will_save and self.optimizer is not None:
             ckpt_dir = os.path.join(self.args.output_dir, f"checkpoint-{saved_step}")
-            if os.path.exists(ckpt_dir):
-                try:
-                    import torch_xla.core.xla_model as xm
+            # DEADLOCK FIX: Do NOT gate this on `os.path.exists(ckpt_dir)` —
+            # that check is per-rank, and ranks 1-N may not see the dir yet
+            # via gcsfuse while rank 0 wrote it. They'd skip the save, rank 0
+            # would enter xm.save alone, and the gather collective deadlocks
+            # forever (observed empirically — step-1000 save hung for days).
+            # All ranks MUST enter xm.save unconditionally so the gather
+            # completes; rank 0 then writes the file.
+            try:
+                import torch_xla.core.xla_model as xm
 
-                    # ALL ranks call xm.save — gather collective completes,
-                    # only rank 0 writes (default xm.save behavior).
-                    opt_path = os.path.join(ckpt_dir, "optimizer.pt")
-                    xm.save(self.optimizer.state_dict(), opt_path)
-                    if self.lr_scheduler is not None:
-                        sched_path = os.path.join(ckpt_dir, "scheduler.pt")
-                        xm.save(self.lr_scheduler.state_dict(), sched_path)
-                    if xm.is_master_ordinal():
-                        print(f"  saved optimizer + scheduler state to {ckpt_dir}")
-                except Exception as e:
-                    print(f"  WARNING: optimizer/scheduler save failed: {e}")
-                    print(f"  (training continues; Adam will reset on next resume)")
+                opt_path = os.path.join(ckpt_dir, "optimizer.pt")
+                xm.save(self.optimizer.state_dict(), opt_path)
+                if self.lr_scheduler is not None:
+                    sched_path = os.path.join(ckpt_dir, "scheduler.pt")
+                    xm.save(self.lr_scheduler.state_dict(), sched_path)
+                if xm.is_master_ordinal():
+                    print(f"  saved optimizer + scheduler state to {ckpt_dir}")
+            except Exception as e:
+                print(f"  WARNING: optimizer/scheduler save failed: {e}")
+                print(f"  (training continues; Adam will reset on next resume)")
 
         return result
 
