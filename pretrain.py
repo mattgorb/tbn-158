@@ -532,12 +532,42 @@ class TrainerWithPerplexity(Trainer):
         return (loss, outputs) if return_outputs else loss
 
 
+def _is_complete_checkpoint(ckpt_dir: Path) -> bool:
+    """A checkpoint is complete only if ALL of these are present:
+      - model weights (pytorch_model.bin or model.safetensors)
+      - trainer_state.json (HF Trainer's resume metadata)
+      - optimizer.pt (Adam moments — without this, optimizer resets and the
+        run loses momentum/variance accumulation)
+
+    Saves can be interrupted (spot preemption, deadlocks, network blips,
+    Ctrl+C mid-save). Partial dirs left behind must be skipped — picking one
+    as the resume point would either crash HF Trainer (missing state) or
+    silently restart from random weights (missing model).
+    """
+    has_state = (ckpt_dir / "trainer_state.json").exists()
+    has_weights = (
+        (ckpt_dir / "pytorch_model.bin").exists()
+        or (ckpt_dir / "model.safetensors").exists()
+    )
+    has_optimizer = (ckpt_dir / "optimizer.pt").exists()
+    return has_state and has_weights and has_optimizer
+
+
 def find_latest_checkpoint(output_dir: str) -> str | None:
-    ckpts = sorted(
+    """Return the highest-step checkpoint that is fully written, falling back
+    through partial saves. Skips dirs missing model weights, trainer_state.json,
+    or optimizer.pt (e.g. from a save that was interrupted mid-write).
+    """
+    all_ckpts = sorted(
         Path(output_dir).glob("checkpoint-*"),
         key=lambda p: int(p.name.split("-")[-1]),
+        reverse=True,
     )
-    return str(ckpts[-1]) if ckpts else None
+    for ckpt in all_ckpts:
+        if _is_complete_checkpoint(ckpt):
+            return str(ckpt)
+        print(f"  skipping incomplete checkpoint {ckpt.name} (missing model/state/optimizer)")
+    return None
 
 
 def main() -> None:
