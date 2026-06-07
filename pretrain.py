@@ -381,23 +381,54 @@ class TrainerWithPerplexity(Trainer):
 
         if will_save and self.optimizer is not None:
             ckpt_dir = os.path.join(self.args.output_dir, f"checkpoint-{saved_step}")
-            # DEADLOCK FIX: Do NOT gate this on `os.path.exists(ckpt_dir)` —
-            # that check is per-rank, and ranks 1-N may not see the dir yet
-            # via gcsfuse while rank 0 wrote it. They'd skip the save, rank 0
-            # would enter xm.save alone, and the gather collective deadlocks
-            # forever (observed empirically — step-1000 save hung for days).
-            # All ranks MUST enter xm.save unconditionally so the gather
-            # completes; rank 0 then writes the file.
+            # SPMD-safe optimizer save. Previous attempts using xm.save
+            # deadlocked forever — xm.save's internal gather collective
+            # interacts poorly with sharded optimizer state under FSDPv2 SPMD,
+            # even when all 8 ranks participate.
+            #
+            # The fix: each rank materializes the optimizer state to CPU
+            # explicitly. Calling .cpu() on a SPMD-sharded tensor triggers
+            # the gather AS A SIDE EFFECT, completing because all ranks
+            # participate (same code path on all ranks). After that, every
+            # rank has an identical CPU copy. Only rank 0 writes the file.
+            # An xm.rendezvous() at the end ensures no rank moves on to the
+            # next training step until the save is durable.
             try:
+                import torch
                 import torch_xla.core.xla_model as xm
 
-                opt_path = os.path.join(ckpt_dir, "optimizer.pt")
-                xm.save(self.optimizer.state_dict(), opt_path)
-                if self.lr_scheduler is not None:
-                    sched_path = os.path.join(ckpt_dir, "scheduler.pt")
-                    xm.save(self.lr_scheduler.state_dict(), sched_path)
+                # 1. Make sure all pending XLA ops settle before snapshotting.
+                xm.mark_step()
+                xm.wait_device_ops()
+
+                # 2. Recursively materialize the optimizer state on CPU.
+                #    The .cpu() call participates in SPMD gather on all ranks.
+                def to_cpu(v):
+                    if torch.is_tensor(v):
+                        return v.detach().cpu()
+                    if isinstance(v, dict):
+                        return {k: to_cpu(vv) for k, vv in v.items()}
+                    if isinstance(v, (list, tuple)):
+                        return type(v)(to_cpu(x) for x in v)
+                    return v
+
+                opt_cpu = to_cpu(self.optimizer.state_dict())
+                sched_cpu = (
+                    to_cpu(self.lr_scheduler.state_dict())
+                    if self.lr_scheduler is not None else None
+                )
+
+                # 3. Only rank 0 writes — state_dict is identical on all ranks.
                 if xm.is_master_ordinal():
+                    opt_path = os.path.join(ckpt_dir, "optimizer.pt")
+                    torch.save(opt_cpu, opt_path)
+                    if sched_cpu is not None:
+                        sched_path = os.path.join(ckpt_dir, "scheduler.pt")
+                        torch.save(sched_cpu, sched_path)
                     print(f"  saved optimizer + scheduler state to {ckpt_dir}")
+
+                # 4. Sync — no rank advances until rank 0's write is durable.
+                xm.rendezvous("optimizer_save_complete")
             except Exception as e:
                 print(f"  WARNING: optimizer/scheduler save failed: {e}")
                 print(f"  (training continues; Adam will reset on next resume)")
