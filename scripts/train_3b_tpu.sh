@@ -74,7 +74,9 @@ for VARIANT in "${VARIANTS[@]}"; do
     # 30+ minutes. This single cat warms the cache in ~2 min, after which the
     # actual training load completes in seconds.
     OUT_DIR="${OUTPUT_BASE}/3B_${VARIANT}${RUN_SUFFIX}"
-    LATEST_CKPT=$(ls -d "${OUT_DIR}"/checkpoint-* 2>/dev/null | sort -V | tail -1)
+    # `|| true` prevents set -e + pipefail from exiting on fresh runs where no
+    # checkpoint-* dir exists yet (ls returns 2 with no match).
+    LATEST_CKPT=$(ls -d "${OUT_DIR}"/checkpoint-* 2>/dev/null | sort -V | tail -1 || true)
     if [ -n "${LATEST_CKPT}" ] && [ -f "${LATEST_CKPT}/pytorch_model.bin" ]; then
         echo "==> Pre-caching ${LATEST_CKPT}/pytorch_model.bin (single-stream cat)"
         time cat "${LATEST_CKPT}/pytorch_model.bin" > /dev/null
