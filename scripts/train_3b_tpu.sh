@@ -80,6 +80,13 @@ for VARIANT in "${VARIANTS[@]}"; do
     if [ -n "${LATEST_CKPT}" ] && [ -f "${LATEST_CKPT}/pytorch_model.bin" ]; then
         echo "==> Pre-caching ${LATEST_CKPT}/pytorch_model.bin (single-stream cat)"
         time cat "${LATEST_CKPT}/pytorch_model.bin" > /dev/null
+        # optimizer.pt (~28 GB Adam moments) — 8 contended workers reading
+        # this cold from gcsfuse take 30-60 min. Pre-warming via sequential
+        # cat is ~3-5 min.
+        if [ -f "${LATEST_CKPT}/optimizer.pt" ]; then
+            echo "==> Pre-caching ${LATEST_CKPT}/optimizer.pt"
+            time cat "${LATEST_CKPT}/optimizer.pt" > /dev/null
+        fi
         echo "    cache warmed."
     fi
 
