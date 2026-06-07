@@ -1,0 +1,28 @@
+# 3B / tbn158 — SMOKE TEST config for verifying the SPMD-safe optimizer save.
+# Saves every 3 steps so a save event happens within a few minutes of training
+# kicking off. Use to verify (a) optimizer.pt + scheduler.pt actually appear
+# in checkpoint dirs, and (b) resume after kill restores Adam state.
+#
+# Workflow:
+#   1. Launch this config. Wait ~15 min for first compile + step 3 save.
+#   2. Check: gsutil ls .../3B_tbn158_smoke/checkpoint-3/  → optimizer.pt present?
+#   3. Mid-run (around step 12-15), delete the TPU instance.
+#   4. Cron recreates TPU, training resumes from latest checkpoint.
+#   5. Watch for: "loaded optimizer state from .../checkpoint-N/optimizer.pt"
+#   6. Confirm loss continues smoothly (no Adam-reset bump).
+#
+# NOT for real training — only 30 steps total, no eval. Use a unique output
+# dir so it doesn't collide with real runs.
+per_device_batch_size: 4
+gradient_accumulation_steps: 8
+seq_len: 2048
+lr: 1.5e-4
+steps: 30
+warmup_steps: 5
+weight_decay: 0.1
+save_steps: 3
+save_total_limit: 10
+logging_steps: 1
+eval_steps: 1000   # effectively disabled
+eval_samples: 0    # disable eval entirely for speed
+bf16: false
