@@ -64,17 +64,26 @@ find_tpu() {
 
 training_is_running() {
     local zone="$1"
-    local count
+    local result
     log "Checking if training process exists on worker 0..."
-    # Force pure key auth — no password fallback, no interactive prompts ever.
-    count=$(timeout 180 gcloud compute tpus tpu-vm ssh "$TPU_NAME" --zone="$zone" --worker=0 \
+    # NOTE: previously used `pgrep -fc pretrain.py`, which gave a permanent
+    # FALSE POSITIVE — the bash shell running the pgrep command has
+    # "pretrain.py" in its own cmdline (it's the search pattern!) so pgrep
+    # always matched its own parent. Cron reported "training is running" for
+    # hours while training was actually dead.
+    #
+    # Fix: check whether the `train` tmux session exists. That session is
+    # what we launch training in; if it's gone, training is gone too.
+    # `tmux has-session -t train` exits 0 if present, 1 if not.
+    # Force pure key auth — no password fallback, no interactive prompts.
+    result=$(timeout 180 gcloud compute tpus tpu-vm ssh "$TPU_NAME" --zone="$zone" --worker=0 \
         --internal-ip \
         --ssh-flag='-o PasswordAuthentication=no' \
         --ssh-flag='-o BatchMode=yes' \
         --ssh-flag='-o ConnectTimeout=30' \
-        --command='pgrep -fc pretrain.py || echo 0' 2>/dev/null | tr -d '[:space:]')
-    log "training_is_running probe returned: '${count:-<empty>}'"
-    [ "${count:-0}" -gt 0 ]
+        --command='tmux has-session -t train 2>/dev/null && echo 1 || echo 0' 2>/dev/null | tr -d '[:space:]')
+    log "training_is_running probe returned: '${result:-<empty>}'"
+    [ "${result:-0}" = "1" ]
 }
 
 # Try every configured zone in order. Echoes the successful zone, returns 0.
