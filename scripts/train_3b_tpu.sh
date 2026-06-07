@@ -74,10 +74,19 @@ for VARIANT in "${VARIANTS[@]}"; do
     # 30+ minutes. This single cat warms the cache in ~2 min, after which the
     # actual training load completes in seconds.
     OUT_DIR="${OUTPUT_BASE}/3B_${VARIANT}${RUN_SUFFIX}"
-    # `|| true` prevents set -e + pipefail from exiting on fresh runs where no
-    # checkpoint-* dir exists yet (ls returns 2 with no match).
-    LATEST_CKPT=$(ls -d "${OUT_DIR}"/checkpoint-* 2>/dev/null | sort -V | tail -1 || true)
-    if [ -n "${LATEST_CKPT}" ] && [ -f "${LATEST_CKPT}/pytorch_model.bin" ]; then
+    # Find the highest-numbered checkpoint dir that actually has a model file.
+    # Naive "ls | sort | tail -1" returns whatever is newest (including partial
+    # saves from interrupted writes), which then fails the -f check and we
+    # silently skip pre-cache. Walk backward through checkpoint-* dirs until
+    # we find one with pytorch_model.bin — matches Python's find_latest_checkpoint.
+    LATEST_CKPT=""
+    for ckpt in $(ls -d "${OUT_DIR}"/checkpoint-* 2>/dev/null | sort -V -r || true); do
+        if [ -f "$ckpt/pytorch_model.bin" ]; then
+            LATEST_CKPT="$ckpt"
+            break
+        fi
+    done
+    if [ -n "${LATEST_CKPT}" ]; then
         echo "==> Pre-caching ${LATEST_CKPT}/pytorch_model.bin (single-stream cat)"
         time cat "${LATEST_CKPT}/pytorch_model.bin" > /dev/null
         # optimizer.pt (~28 GB Adam moments) — 8 contended workers reading
