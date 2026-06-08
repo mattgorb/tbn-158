@@ -6,17 +6,18 @@
 # LLM quality holds. If quality matches tbn158 (tile_size=2), the paper's
 # sub-bit claim gets much stronger ("we go to 0.4 bits/weight, not just 0.79").
 #
-# LR=1.5e-4 matches the BitNet b1.58 paper's scale for similar sizes. Lower
-# than 3.0e-4 to be conservative — tile_size=4 may be more sensitive to
-# instability because more weights are pooled before quantization (less
-# expressive per-tile signal during training).
+# LR=3.0e-4 matches the high-LR run (3B_tbn158_100b). This lets you compare
+# tbn158 (tile_size=2) vs tbn158_t4 (tile_size=4) at *the same LR*, isolating
+# the effect of tile size on training dynamics. tile_size=4 may need higher
+# LR than tile_size=2 because per-tile gradient averaging effectively dampens
+# the update magnitude — so 3.0e-4 is a defensible choice for this variant.
 #
 # Global batch = 4 × 8 chips × 8 accum = 256 seqs × 2048 = 524K tokens/step.
 # 200000 steps × 524K ≈ 105B tokens. Wall-clock ~32 days on v6e-8.
 per_device_batch_size: 4
 gradient_accumulation_steps: 8
 seq_len: 2048
-lr: 1.5e-4
+lr: 3.0e-4
 steps: 200000
 warmup_steps: 2000
 weight_decay: 0.1
