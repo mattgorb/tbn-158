@@ -100,6 +100,12 @@ LINEAR_FACTORIES = {
     "plain": nn.Linear,
     "bitnet158": BitLinear158,
     "tbn158": partial(TBNBitLinear158, tile_size=2),
+    # Larger-tile TBN variants for sub-bit ablation. Effective bits/weight
+    # roughly = log2(3) / tile_size + small overhead for gamma scale.
+    #   tile_size=4 → ~0.40 bits/weight (2x more compression than tbn158)
+    #   tile_size=8 → ~0.20 bits/weight (4x more compression than tbn158)
+    "tbn158_t4": partial(TBNBitLinear158, tile_size=4),
+    "tbn158_t8": partial(TBNBitLinear158, tile_size=8),
 }
 
 
