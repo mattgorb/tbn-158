@@ -13,8 +13,8 @@
 #
 # NOT for real training — only 30 steps total, no eval. Use a unique output
 # dir so it doesn't collide with real runs.
-per_device_batch_size: 4
-gradient_accumulation_steps: 8
+per_device_batch_size: 8
+gradient_accumulation_steps: 4
 seq_len: 2048
 lr: 1.5e-4
 steps: 30
