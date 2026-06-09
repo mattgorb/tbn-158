@@ -1,0 +1,25 @@
+# 1.3B / plain (FP16 reference) — paper-grade 100B-token run on 2× A100 80 GB.
+# This is the FP16 baseline that anchors the comparison table:
+#   Plain (FP16) vs BitNet b1.58 vs TBN (your method).
+#
+# Same global batch / schedule as 1.3B_tbn158_2gpu_100b.yaml so the comparison
+# is apples-to-apples — only the linear layer's weight representation differs.
+#
+# Global batch = 16 × 2 GPUs × 8 accum = 256 sequences × 2048 = 524K tokens/step.
+# 200000 steps × 524K ≈ 105B tokens.
+#
+# Wall-clock: ~25-35 days at typical 2× A100 throughput with FSDP.
+per_device_batch_size: 16
+gradient_accumulation_steps: 8
+seq_len: 2048
+lr: 3.0e-4
+steps: 200000
+warmup_steps: 2000
+weight_decay: 0.1
+save_steps: 1000
+save_total_limit: 3
+logging_steps: 50
+eval_steps: 1000
+eval_samples: 1024
+bf16: false
+no_gradient_checkpointing: false

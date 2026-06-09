@@ -43,6 +43,15 @@ SIZE_HPARAMS = {
         num_hidden_layers=24,
         intermediate_size=4096,
     ),
+    "1.3B": dict(
+        # Matches BitNet b1.58 paper's 1.3B-scale LLaMA, modernized with GQA
+        # (kv_heads=8) for Llama-3 style. ~1.33B parameters with tied embeds.
+        hidden_size=2048,
+        num_attention_heads=32,
+        num_key_value_heads=8,
+        num_hidden_layers=24,
+        intermediate_size=5504,
+    ),
     "3B": dict(
         hidden_size=3072,
         num_attention_heads=24,
