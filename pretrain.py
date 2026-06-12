@@ -502,11 +502,21 @@ class TrainerWithPerplexity(Trainer):
                 try:
                     import torch.distributed.checkpoint as dcp
                     from torch_xla.experimental.distributed_checkpoint import (
-                        SPMDLoadPlanner,
+                        SPMDLoadPlanner, prime_optimizer,
                     )
 
-                    # Build the target state_dict. Build it the SAME way the
-                    # save did so the keys match.
+                    # CRITICAL: prime the optimizer so its state_dict has the
+                    # full shape (state.0.step, state.0.exp_avg, etc.). Without
+                    # this, a fresh optimizer's state is EMPTY — its
+                    # state_dict() returns {"state": {}, "param_groups": [...]},
+                    # and dcp.load can't populate the missing structure.
+                    # prime_optimizer runs one zero-grad step that allocates
+                    # the m/v moments without changing the model.
+                    print(f"  priming optimizer to allocate state slots...")
+                    prime_optimizer(self.optimizer)
+
+                    # Build the target state_dict. Now state_dict() has the
+                    # full structure that matches the saved keys.
                     state_dict = {"optimizer": self.optimizer.state_dict()}
                     if self.lr_scheduler is not None:
                         state_dict["scheduler"] = self.lr_scheduler.state_dict()
