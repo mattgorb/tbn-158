@@ -20,6 +20,7 @@ NETWORK="${NETWORK:-tbn158-net}"
 REPO_URL="${REPO_URL:?REPO_URL env var required, e.g. https://<pat>@github.com/<you>/tbn-158.git}"
 GCS_BUCKET="${GCS_BUCKET:-matt-tbn158-ckpts}"
 VARIANT="${VARIANT:-tbn158}"
+SIZE="${SIZE:-3B}"
 USE_SPOT="${USE_SPOT:-true}"
 ACCEL_CONFIG="${ACCEL_CONFIG:-configs/accelerate_tpu_v6e_8.yaml}"
 RUN_SUFFIX="${RUN_SUFFIX:-}"
@@ -159,7 +160,7 @@ provision_and_launch_all_workers() {
             pip install --user -r requirements.txt
             tmux kill-session -t train 2>/dev/null || true
             echo '[provision] launching tmux session train...'
-            tmux new -d -s train \"ACCEL=$ACCEL_CONFIG GCS_BUCKET=$GCS_BUCKET RUN_SUFFIX=$RUN_SUFFIX CONFIG_FILE=$CONFIG_FILE bash scripts/train_3b_tpu.sh $VARIANT 2>&1 | tee /tmp/train.log\"
+            tmux new -d -s train \"SIZE=$SIZE ACCEL=$ACCEL_CONFIG GCS_BUCKET=$GCS_BUCKET RUN_SUFFIX=$RUN_SUFFIX CONFIG_FILE=$CONFIG_FILE bash scripts/train_3b_tpu.sh $VARIANT 2>&1 | tee /tmp/train.log\"
             echo '[provision] === DONE ==='
         " 2>&1 | tee -a "$LOG_FILE"
 }
