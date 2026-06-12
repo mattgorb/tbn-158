@@ -310,6 +310,29 @@ def manual_load_checkpoint_weights(model, ckpt_dir: str) -> int:
         print(f"  stripped '_orig_module.' from {n_stripped} keys")
     state_dict = renamed
 
+    # HARD CHECK: refuse to load NaN/Inf model weights. A corrupted save (from
+    # divergence right before the save event) silently propagates to every
+    # subsequent resume, where it appears as instant-NaN loss. Caught
+    # empirically: runs that diverged briefly before save would save NaN
+    # weights, then every resume thereafter started with NaN.
+    import torch as _torch
+    nan_count = 0
+    inf_count = 0
+    for k, v in state_dict.items():
+        if _torch.is_tensor(v) and v.is_floating_point():
+            n_nan = _torch.isnan(v).sum().item()
+            n_inf = _torch.isinf(v).sum().item()
+            if n_nan > 0 or n_inf > 0:
+                nan_count += n_nan
+                inf_count += n_inf
+                print(f"  CORRUPT TENSOR: {k}: {n_nan} NaN, {n_inf} Inf")
+    if nan_count > 0 or inf_count > 0:
+        raise RuntimeError(
+            f"Checkpoint {model_file} has {nan_count} NaN + {inf_count} Inf "
+            f"weight values — checkpoint is corrupt. Roll back to an earlier "
+            f"checkpoint and delete this one."
+        )
+
     missing, unexpected = model.load_state_dict(state_dict, strict=False)
     if missing:
         print(f"  WARNING: {len(missing)} keys missing from checkpoint, e.g. {missing[:3]}")
@@ -418,7 +441,32 @@ class TrainerWithPerplexity(Trainer):
                     if self.lr_scheduler is not None else None
                 )
 
-                # 3. Only rank 0 writes — state_dict is identical on all ranks.
+                # 3. REFUSE TO SAVE NaN/Inf state. If a transient divergence
+                #    happened just before this save event, the optimizer's m/v
+                #    moments may be NaN. Saving that state poisons every
+                #    subsequent resume with instant-NaN loss. Better to skip
+                #    this save and let Adam reset on the next resume — worth
+                #    the cost of ~few hundred recovery steps vs an unrecoverable
+                #    NaN spiral.
+                def _has_bad_values(obj):
+                    if torch.is_tensor(obj):
+                        if obj.is_floating_point():
+                            if torch.isnan(obj).any() or torch.isinf(obj).any():
+                                return True
+                        return False
+                    if isinstance(obj, dict):
+                        return any(_has_bad_values(v) for v in obj.values())
+                    if isinstance(obj, (list, tuple)):
+                        return any(_has_bad_values(x) for x in obj)
+                    return False
+
+                if _has_bad_values(opt_cpu):
+                    if xm.is_master_ordinal():
+                        print(f"  REFUSING TO SAVE: optimizer state contains NaN/Inf at step {saved_step}. Skipping save to prevent poisoning future resumes.")
+                    xm.rendezvous("optimizer_save_complete")
+                    return result
+
+                # 4. Only rank 0 writes — state_dict is identical on all ranks.
                 if xm.is_master_ordinal():
                     opt_path = os.path.join(ckpt_dir, "optimizer.pt")
                     torch.save(opt_cpu, opt_path)
