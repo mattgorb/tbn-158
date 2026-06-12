@@ -593,7 +593,12 @@ def _is_complete_checkpoint(ckpt_dir: Path) -> bool:
         (ckpt_dir / "pytorch_model.bin").exists()
         or (ckpt_dir / "model.safetensors").exists()
     )
-    has_optimizer = (ckpt_dir / "optimizer.pt").exists()
+    # New format: optimizer_state/ subdir (SPMD dcp layout) — must contain
+    # at least one .metadata file from torch.distributed.checkpoint.
+    opt_dir = ckpt_dir / "optimizer_state"
+    has_optimizer = (
+        opt_dir.is_dir() and any(opt_dir.iterdir())
+    ) or (ckpt_dir / "optimizer.pt").exists()  # legacy format fallback
     return has_state and has_weights and has_optimizer
 
 
