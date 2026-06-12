@@ -1,0 +1,18 @@
+# 1.3B / tbn158 — LR=1.5e-4 variant of the 100B-token run.
+# Pair with 1.3B_tbn158_100b_v6e_8_tpu.yaml (lr=3.0e-4) for LR sensitivity.
+#
+# Global batch = 8 × 8 chips × 4 accum = 256 seqs × 2048 = 524K tokens/step.
+# 200000 steps × 524K ≈ 105B tokens.
+per_device_batch_size: 8
+gradient_accumulation_steps: 4
+seq_len: 2048
+lr: 1.5e-4
+steps: 200000
+warmup_steps: 2000
+weight_decay: 0.1
+save_steps: 1000
+save_total_limit: 3
+logging_steps: 50
+eval_steps: 1000
+eval_samples: 1024
+bf16: false

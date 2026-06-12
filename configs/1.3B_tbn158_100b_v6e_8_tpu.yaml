@@ -1,0 +1,19 @@
+# 1.3B / tbn158 — paper-grade ~100B-token target on TPU v6e-8.
+# Matches BitNet b1.58 paper's 1.3B-scale row for direct comparison.
+#
+# Global batch = 8 × 8 chips × 4 accum = 256 seqs × 2048 = 524K tokens/step.
+# 200000 steps × 524K ≈ 105B tokens.
+# Wall-clock estimate: ~12-18 days at ~6-8 sec/step on v6e-8.
+per_device_batch_size: 8
+gradient_accumulation_steps: 4
+seq_len: 2048
+lr: 3.0e-4
+steps: 200000
+warmup_steps: 2000
+weight_decay: 0.1
+save_steps: 1000
+save_total_limit: 3
+logging_steps: 50
+eval_steps: 1000
+eval_samples: 1024
+bf16: false
