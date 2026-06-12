@@ -73,7 +73,8 @@ for VARIANT in "${VARIANTS[@]}"; do
     # ~100-300 MB/s; 8 contending readers get ~5 MB/s each and look hung for
     # 30+ minutes. This single cat warms the cache in ~2 min, after which the
     # actual training load completes in seconds.
-    OUT_DIR="${OUTPUT_BASE}/3B_${VARIANT}${RUN_SUFFIX}"
+    SIZE="${SIZE:-3B}"
+    OUT_DIR="${OUTPUT_BASE}/${SIZE}_${VARIANT}${RUN_SUFFIX}"
     # Find the highest-numbered checkpoint dir that actually has a model file.
     # Naive "ls | sort | tail -1" returns whatever is newest (including partial
     # saves from interrupted writes), which then fails the -f check and we
@@ -102,13 +103,16 @@ for VARIANT in "${VARIANTS[@]}"; do
     # PYTHONUNBUFFERED=1 forces Python's stdout/stderr to be line-buffered even
     # when piped through tee. Without this, `print()` output sits in an 8 KB
     # buffer and looks like a hang when in fact training is progressing.
+    # SIZE defaults to 3B for backwards compat; override with SIZE=1.3B for
+    # smaller-model runs (e.g. SIZE=1.3B for the BitNet b1.58 paper's 1.3B row).
+    SIZE="${SIZE:-3B}"
     PYTHONUNBUFFERED=1 accelerate launch --config_file "${ACCEL}" \
-        pretrain.py --size 3B --variant "${VARIANT}" \
+        pretrain.py --size "${SIZE}" --variant "${VARIANT}" \
         --config "${CFG}" \
-        --output_dir "${OUTPUT_BASE}/3B_${VARIANT}${RUN_SUFFIX}" \
-        --run_name "3B_${VARIANT}${RUN_SUFFIX}" \
+        --output_dir "${OUTPUT_BASE}/${SIZE}_${VARIANT}${RUN_SUFFIX}" \
+        --run_name "${SIZE}_${VARIANT}${RUN_SUFFIX}" \
         --resume \
-        2>&1 | tee "logs/3B_${VARIANT}${RUN_SUFFIX}_tpu.log"
+        2>&1 | tee "logs/${SIZE}_${VARIANT}${RUN_SUFFIX}_tpu.log"
 done
 
 echo
