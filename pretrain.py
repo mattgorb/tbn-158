@@ -486,41 +486,57 @@ class TrainerWithPerplexity(Trainer):
 
         # Try to load optimizer state from our custom save:
         # SPMD-aware load via torch.distributed.checkpoint + SPMDLoadPlanner.
-        # Reads each tensor's target partition spec from the current optimizer
-        # (which is the freshly-wrapped optimizer this run) and loads each
-        # shard into the right slot. Handles re-sharding if the topology
-        # changes between save and load.
+        # Wrapped defensively: ANY exception here falls back to Adam reset
+        # rather than crashing the entire xmp.spawn run. Adam reset costs
+        # ~500 steps; a crashed run costs hours of restart.
         opt_save_dir = os.path.join(checkpoint, "optimizer_state")
         opt_loaded = False
         sched_loaded = False
         if os.path.isdir(opt_save_dir) and self.optimizer is not None:
-            try:
-                import torch.distributed.checkpoint as dcp
-                from torch_xla.experimental.distributed_checkpoint import (
-                    SPMDLoadPlanner,
-                )
+            # Pre-flight check: confirm the .metadata file exists. If it
+            # doesn't, dcp.load will fail before doing anything useful.
+            metadata_path = os.path.join(opt_save_dir, ".metadata")
+            if not os.path.exists(metadata_path):
+                print(f"  optimizer_state/.metadata missing — skipping load (Adam will reset)")
+            else:
+                try:
+                    import torch.distributed.checkpoint as dcp
+                    from torch_xla.experimental.distributed_checkpoint import (
+                        SPMDLoadPlanner,
+                    )
 
-                # Build the target state_dict — dcp.load populates these
-                # tensors in-place to match the saved values.
-                state_dict = {"optimizer": self.optimizer.state_dict()}
-                if self.lr_scheduler is not None:
-                    state_dict["scheduler"] = self.lr_scheduler.state_dict()
+                    # Build the target state_dict. Build it the SAME way the
+                    # save did so the keys match.
+                    state_dict = {"optimizer": self.optimizer.state_dict()}
+                    if self.lr_scheduler is not None:
+                        state_dict["scheduler"] = self.lr_scheduler.state_dict()
 
-                dcp.load(
-                    state_dict=state_dict,
-                    storage_reader=dcp.FileSystemReader(opt_save_dir),
-                    planner=SPMDLoadPlanner(),
-                )
-                self.optimizer.load_state_dict(state_dict["optimizer"])
-                opt_loaded = True
-                print(f"  loaded SPMD optimizer state from {opt_save_dir}")
-                if "scheduler" in state_dict and self.lr_scheduler is not None:
-                    self.lr_scheduler.load_state_dict(state_dict["scheduler"])
-                    sched_loaded = True
-                    print(f"  loaded scheduler state from {opt_save_dir}")
-            except Exception as e:
-                print(f"  WARNING: optimizer/scheduler load failed: {type(e).__name__}: {e}")
-                print(f"  Adam will reset; continuing with fresh moments")
+                    dcp.load(
+                        state_dict=state_dict,
+                        storage_reader=dcp.FileSystemReader(opt_save_dir),
+                        planner=SPMDLoadPlanner(),
+                    )
+                    self.optimizer.load_state_dict(state_dict["optimizer"])
+                    opt_loaded = True
+                    print(f"  loaded SPMD optimizer state from {opt_save_dir}")
+                    if "scheduler" in state_dict and self.lr_scheduler is not None:
+                        self.lr_scheduler.load_state_dict(state_dict["scheduler"])
+                        sched_loaded = True
+                        print(f"  loaded scheduler state from {opt_save_dir}")
+                except BaseException as e:
+                    # Catch EVERYTHING — including BaseException — so a
+                    # checkpoint format mismatch doesn't kill the whole run.
+                    # Adam reset is recoverable; a crashed xmp.spawn is not.
+                    msg = str(e)[:500]
+                    print(f"  WARNING: optimizer/scheduler load failed: {type(e).__name__}: {msg}")
+                    print(f"  Adam will reset; continuing with fresh moments")
+                    # Also rendezvous so other ranks aren't left hanging on a
+                    # half-failed collective:
+                    try:
+                        import torch_xla.core.xla_model as xm
+                        xm.rendezvous("after_failed_dcp_load")
+                    except Exception:
+                        pass
 
         # Fallback: if scheduler didn't load from file, fast-forward by
         # global_step (avoids warmup replay).
