@@ -404,82 +404,67 @@ class TrainerWithPerplexity(Trainer):
 
         if will_save and self.optimizer is not None:
             ckpt_dir = os.path.join(self.args.output_dir, f"checkpoint-{saved_step}")
-            # SPMD-safe optimizer save. Previous attempts using xm.save
-            # deadlocked forever — xm.save's internal gather collective
-            # interacts poorly with sharded optimizer state under FSDPv2 SPMD,
-            # even when all 8 ranks participate.
+            # SPMD-AWARE OPTIMIZER SAVE via torch_xla.experimental.distributed_checkpoint.
             #
-            # The fix: each rank materializes the optimizer state to CPU
-            # explicitly. Calling .cpu() on a SPMD-sharded tensor triggers
-            # the gather AS A SIDE EFFECT, completing because all ranks
-            # participate (same code path on all ranks). After that, every
-            # rank has an identical CPU copy. Only rank 0 writes the file.
-            # An xm.rendezvous() at the end ensures no rank moves on to the
-            # next training step until the save is durable.
+            # Why this is the third (and hopefully final) attempt:
+            #   1. xm.save → deadlock (only rank-0 entered the collective)
+            #   2. state_dict() + .cpu() + torch.save → silent corruption.
+            #      Under SPMD, .cpu() doesn't reliably materialize the GLOBAL
+            #      view of partitioned tensors. Adam m/v on some ranks got the
+            #      local shard while others got global. Rank 0 wrote whichever
+            #      it happened to have. On resume, all ranks loaded rank 0's
+            #      (partially shard-only) data and applied it to their sharded
+            #      optimizer slots. Wrong moments → enormous wrong updates →
+            #      weights overflow → NaN loss on first eval.
+            #
+            # The proper fix uses torch.distributed.checkpoint with SPMD-aware
+            # planners. The planners read each tensor's partition spec, then
+            # coordinate save/load across ranks correctly. On load, re-sharding
+            # to match the (possibly different) target partition specs is handled.
             try:
                 import torch
                 import torch_xla.core.xla_model as xm
+                import torch.distributed.checkpoint as dcp
+                from torch_xla.experimental.distributed_checkpoint import (
+                    SPMDSavePlanner,
+                )
 
-                # 1. Make sure all pending XLA ops settle before snapshotting.
+                # 1. Drain pending XLA ops so state is consistent.
                 xm.mark_step()
                 xm.wait_device_ops()
 
-                # 2. Recursively materialize the optimizer state on CPU.
-                #    The .cpu() call participates in SPMD gather on all ranks.
-                def to_cpu(v):
-                    if torch.is_tensor(v):
-                        return v.detach().cpu()
-                    if isinstance(v, dict):
-                        return {k: to_cpu(vv) for k, vv in v.items()}
-                    if isinstance(v, (list, tuple)):
-                        return type(v)(to_cpu(x) for x in v)
-                    return v
-
-                opt_cpu = to_cpu(self.optimizer.state_dict())
-                sched_cpu = (
-                    to_cpu(self.lr_scheduler.state_dict())
-                    if self.lr_scheduler is not None else None
-                )
-
-                # 3. REFUSE TO SAVE NaN/Inf state. If a transient divergence
-                #    happened just before this save event, the optimizer's m/v
-                #    moments may be NaN. Saving that state poisons every
-                #    subsequent resume with instant-NaN loss. Better to skip
-                #    this save and let Adam reset on the next resume — worth
-                #    the cost of ~few hundred recovery steps vs an unrecoverable
-                #    NaN spiral.
-                def _has_bad_values(obj):
-                    if torch.is_tensor(obj):
-                        if obj.is_floating_point():
-                            if torch.isnan(obj).any() or torch.isinf(obj).any():
-                                return True
-                        return False
-                    if isinstance(obj, dict):
-                        return any(_has_bad_values(v) for v in obj.values())
-                    if isinstance(obj, (list, tuple)):
-                        return any(_has_bad_values(x) for x in obj)
-                    return False
-
-                if _has_bad_values(opt_cpu):
-                    if xm.is_master_ordinal():
-                        print(f"  REFUSING TO SAVE: optimizer state contains NaN/Inf at step {saved_step}. Skipping save to prevent poisoning future resumes.")
-                    xm.rendezvous("optimizer_save_complete")
-                    return result
-
-                # 4. Only rank 0 writes — state_dict is identical on all ranks.
+                # 2. Use a subdir so dcp's multi-file layout doesn't collide
+                #    with HF Trainer's pytorch_model.bin or trainer_state.json.
+                opt_save_dir = os.path.join(ckpt_dir, "optimizer_state")
                 if xm.is_master_ordinal():
-                    opt_path = os.path.join(ckpt_dir, "optimizer.pt")
-                    torch.save(opt_cpu, opt_path)
-                    if sched_cpu is not None:
-                        sched_path = os.path.join(ckpt_dir, "scheduler.pt")
-                        torch.save(sched_cpu, sched_path)
-                    print(f"  saved optimizer + scheduler state to {ckpt_dir}")
+                    os.makedirs(opt_save_dir, exist_ok=True)
+                xm.rendezvous("opt_save_mkdir")
 
-                # 4. Sync — no rank advances until rank 0's write is durable.
+                # 3. Build the state_dict to save. dcp + SPMDSavePlanner reads
+                #    partition specs directly from these tensors and handles
+                #    the gather correctly across ranks (no .cpu() guessing).
+                state_dict = {"optimizer": self.optimizer.state_dict()}
+                if self.lr_scheduler is not None:
+                    state_dict["scheduler"] = self.lr_scheduler.state_dict()
+
+                dcp.save(
+                    state_dict=state_dict,
+                    storage_writer=dcp.FileSystemWriter(opt_save_dir),
+                    planner=SPMDSavePlanner(),
+                )
+                if xm.is_master_ordinal():
+                    print(f"  saved SPMD optimizer state to {opt_save_dir}")
                 xm.rendezvous("optimizer_save_complete")
             except Exception as e:
-                print(f"  WARNING: optimizer/scheduler save failed: {e}")
-                print(f"  (training continues; Adam will reset on next resume)")
+                if "is_master_ordinal" in dir() or True:  # ensure we always log
+                    print(f"  WARNING: optimizer/scheduler save failed: {type(e).__name__}: {e}")
+                    print(f"  (training continues; Adam will reset on next resume)")
+                # Try to recover by rendezvous so other ranks don't hang.
+                try:
+                    import torch_xla.core.xla_model as xm
+                    xm.rendezvous("optimizer_save_complete")
+                except Exception:
+                    pass
 
         return result
 
@@ -500,31 +485,42 @@ class TrainerWithPerplexity(Trainer):
             return
 
         # Try to load optimizer state from our custom save:
-        opt_path = os.path.join(checkpoint, "optimizer.pt")
+        # SPMD-aware load via torch.distributed.checkpoint + SPMDLoadPlanner.
+        # Reads each tensor's target partition spec from the current optimizer
+        # (which is the freshly-wrapped optimizer this run) and loads each
+        # shard into the right slot. Handles re-sharding if the topology
+        # changes between save and load.
+        opt_save_dir = os.path.join(checkpoint, "optimizer_state")
         opt_loaded = False
-        if os.path.exists(opt_path) and self.optimizer is not None:
-            try:
-                import torch
-                opt_state = torch.load(opt_path, map_location="cpu", weights_only=False)
-                self.optimizer.load_state_dict(opt_state)
-                print(f"  loaded optimizer state from {opt_path}")
-                opt_loaded = True
-            except Exception as e:
-                print(f"  WARNING: optimizer load failed: {e}")
-                print(f"  Adam will reset; continuing with fresh moments")
-
-        # Try to load scheduler state:
-        sched_path = os.path.join(checkpoint, "scheduler.pt")
         sched_loaded = False
-        if os.path.exists(sched_path) and self.lr_scheduler is not None:
+        if os.path.isdir(opt_save_dir) and self.optimizer is not None:
             try:
-                import torch
-                sched_state = torch.load(sched_path, map_location="cpu", weights_only=False)
-                self.lr_scheduler.load_state_dict(sched_state)
-                print(f"  loaded scheduler state from {sched_path}")
-                sched_loaded = True
+                import torch.distributed.checkpoint as dcp
+                from torch_xla.experimental.distributed_checkpoint import (
+                    SPMDLoadPlanner,
+                )
+
+                # Build the target state_dict — dcp.load populates these
+                # tensors in-place to match the saved values.
+                state_dict = {"optimizer": self.optimizer.state_dict()}
+                if self.lr_scheduler is not None:
+                    state_dict["scheduler"] = self.lr_scheduler.state_dict()
+
+                dcp.load(
+                    state_dict=state_dict,
+                    storage_reader=dcp.FileSystemReader(opt_save_dir),
+                    planner=SPMDLoadPlanner(),
+                )
+                self.optimizer.load_state_dict(state_dict["optimizer"])
+                opt_loaded = True
+                print(f"  loaded SPMD optimizer state from {opt_save_dir}")
+                if "scheduler" in state_dict and self.lr_scheduler is not None:
+                    self.lr_scheduler.load_state_dict(state_dict["scheduler"])
+                    sched_loaded = True
+                    print(f"  loaded scheduler state from {opt_save_dir}")
             except Exception as e:
-                print(f"  WARNING: scheduler load failed: {e}")
+                print(f"  WARNING: optimizer/scheduler load failed: {type(e).__name__}: {e}")
+                print(f"  Adam will reset; continuing with fresh moments")
 
         # Fallback: if scheduler didn't load from file, fast-forward by
         # global_step (avoids warmup replay).
